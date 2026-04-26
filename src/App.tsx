@@ -3,6 +3,7 @@ import {
   CircleMarker,
   MapContainer,
   Popup,
+  Rectangle,
   TileLayer,
   useMap,
   useMapEvents,
@@ -116,7 +117,17 @@ type BuildingFootprint = LatLng & {
 
 type DataMode = 'live' | 'sample'
 type CrimeDataMode = 'live' | 'empty'
-type BuildingDataMode = 'live' | 'empty' | 'loading'
+type BuildingDataMode = 'live' | 'empty' | 'loading' | 'partial'
+
+type LoadStageId = 'osm' | 'crime' | 'noise' | 'traffic' | 'buildings'
+type LoadStageStatus = 'idle' | 'loading' | 'cached' | 'live' | 'empty' | 'partial' | 'error'
+
+type LoadStage = {
+  label: string
+  status: LoadStageStatus
+  count?: number
+  detail?: string
+}
 
 type MainDataSnapshot = {
   pois: Poi[]
@@ -131,6 +142,14 @@ type MainDataSnapshot = {
 type BuildingDataSnapshot = {
   buildingFootprints: BuildingFootprint[]
   buildingDataMode: Exclude<BuildingDataMode, 'loading'>
+  buildingTotalCount: number
+  buildingIsCapped: boolean
+}
+
+type BuildingFetchResult = {
+  buildings: BuildingFootprint[]
+  total: number
+  isCapped: boolean
 }
 
 type Criterion = {
@@ -274,7 +293,7 @@ const BOSTON_CENTER: LatLng = {
 const DEFAULT_CELL_SIZE_METERS = 100
 const RESOLUTION_OPTIONS = [50, 100, 150, 200, 300] as const
 const CRIME_RADIUS_METERS = 220
-const API_CACHE_VERSION = 'housing-score-v11'
+const API_CACHE_VERSION = 'housing-score-v12'
 const API_CACHE_TTL_MS = 1000 * 60 * 60 * 12
 const ZONE_SNAPSHOT_TTL_MS = 1000 * 60 * 10
 const PARK_SCORE_FLOOR = 0.55
@@ -286,6 +305,7 @@ const AIRPORT_HARD_NOISE_METERS = 900
 const AIRPORT_SOFT_NOISE_METERS = 4200
 const TRAFFIC_MAX_AADT = 85_000
 const BUILDING_MATCH_RADIUS_METERS = 90
+const BUILDING_STORE_LIMIT = 120_000
 const RESIDENTIAL_BUILDING_EVIDENCE_METERS = 95
 const LAND_EVIDENCE_BUFFER_METERS = 125
 const METERS_PER_DEGREE_LAT = 111_320
@@ -579,6 +599,14 @@ const CATEGORY_META: Record<
   transit: { label: 'Транспорт', color: '#635bff', icon: TrainFront },
 }
 
+const INITIAL_LOAD_STAGES: Record<LoadStageId, LoadStage> = {
+  osm: { label: 'OSM', status: 'idle' },
+  crime: { label: 'Crime', status: 'idle' },
+  noise: { label: 'Noise', status: 'idle' },
+  traffic: { label: 'Traffic', status: 'idle' },
+  buildings: { label: 'Buildings', status: 'idle' },
+}
+
 const SCORE_BANDS = [
   { min: 0, max: 10, range: '0-10', label: 'Нежилая зона', color: '#d7191c', rgb: [215, 25, 28] },
   { min: 11, max: 20, range: '11-20', label: 'Пиздец', color: '#d7191c', rgb: [215, 25, 28] },
@@ -756,11 +784,62 @@ const genericCityCheckpoints = (city: string, bounds: MapBounds, center: LatLng)
   ]
 }
 
+const normalizeBounds = (start: LatLng, end: LatLng): MapBounds => ({
+  south: Math.min(start.lat, end.lat),
+  west: Math.min(start.lng, end.lng),
+  north: Math.max(start.lat, end.lat),
+  east: Math.max(start.lng, end.lng),
+})
+
+const centerForBounds = (bounds: MapBounds): LatLng => ({
+  lat: (bounds.south + bounds.north) / 2,
+  lng: (bounds.west + bounds.east) / 2,
+})
+
+const isUsZipCode = (value: string) => /^\d{5}(?:-\d{4})?$/.test(value.trim())
+
 type NominatimPlace = {
   lat: string
   lon: string
   display_name: string
   boundingbox?: [string, string, string, string]
+}
+
+const cityConfigFromNominatimPlace = (
+  place: NominatimPlace,
+  stateCode: string,
+  label: string,
+  idPrefix: string,
+): CityConfig => {
+  const lat = Number(place.lat)
+  const lng = Number(place.lon)
+  const [southRaw, northRaw, westRaw, eastRaw] = place.boundingbox ?? []
+  const bounds = {
+    south: Number(southRaw),
+    north: Number(northRaw),
+    west: Number(westRaw),
+    east: Number(eastRaw),
+  }
+  const fallbackBounds = {
+    south: lat - 0.025,
+    north: lat + 0.025,
+    west: lng - 0.035,
+    east: lng + 0.035,
+  }
+  const center = { lat, lng }
+  const safeBounds = limitBoundsAroundCenter(
+    Object.values(bounds).every(Number.isFinite) ? bounds : fallbackBounds,
+    center,
+  )
+
+  return {
+    id: `${idPrefix}-${stateCode}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    state: stateCode,
+    city: label,
+    bounds: safeBounds,
+    center,
+    checkpoints: genericCityCheckpoints(label, safeBounds, center),
+  }
 }
 
 const fetchCityConfig = async (stateCode: string, cityName: string): Promise<CityConfig> => {
@@ -793,36 +872,44 @@ const fetchCityConfig = async (stateCode: string, cityName: string): Promise<Cit
     throw new Error('city not found')
   }
 
-  const lat = Number(place.lat)
-  const lng = Number(place.lon)
-  const [southRaw, northRaw, westRaw, eastRaw] = place.boundingbox ?? []
-  const bounds = {
-    south: Number(southRaw),
-    north: Number(northRaw),
-    west: Number(westRaw),
-    east: Number(eastRaw),
-  }
-  const fallbackBounds = {
-    south: lat - 0.08,
-    north: lat + 0.08,
-    west: lng - 0.1,
-    east: lng + 0.1,
-  }
-  const center = { lat, lng }
-  const safeBounds = limitBoundsAroundCenter(
-    Object.values(bounds).every(Number.isFinite) ? bounds : fallbackBounds,
-    center,
-  )
   const city = cityName.trim()
 
-  return {
-    id: `custom-${stateCode}-${city.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-    state: stateCode,
-    city,
-    bounds: safeBounds,
-    center,
-    checkpoints: genericCityCheckpoints(city, safeBounds, center),
+  return cityConfigFromNominatimPlace(place, stateCode, city, 'custom')
+}
+
+const fetchZipConfig = async (stateCode: string, zipCode: string): Promise<CityConfig> => {
+  const state = US_STATES.find((item) => item.code === stateCode)
+  const normalizedZip = zipCode.trim()
+
+  if (!state || !isUsZipCode(normalizedZip)) {
+    throw new Error('zip required')
   }
+
+  const searchParams = new URLSearchParams({
+    format: 'jsonv2',
+    limit: '1',
+    countrycodes: 'us',
+    addressdetails: '1',
+    postalcode: normalizedZip,
+    state: state.name,
+  })
+  const cacheKey = `zip:${stateCode}:${normalizedZip.toLowerCase()}`
+  const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
+
+    if (!response.ok) {
+      throw new Error(`Nominatim ${response.status}`)
+    }
+
+    return (await response.json()) as NominatimPlace[]
+  })
+  const place = places[0]
+
+  if (!place) {
+    throw new Error('zip not found')
+  }
+
+  return cityConfigFromNominatimPlace(place, stateCode, `ZIP ${normalizedZip}`, 'zip')
 }
 
 const buildOverpassQuery = (bounds: MapBounds) => {
@@ -1355,7 +1442,27 @@ const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force 
   }
 }
 
-const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
+const buildingPriority = (building: BuildingFootprint) => {
+  if (building.use === 'residential') {
+    return 0
+  }
+
+  if (building.levels !== null || building.heightMeters !== null) {
+    return 1
+  }
+
+  if (building.use === 'nonResidential') {
+    return 2
+  }
+
+  return 3
+}
+
+const fetchBuildingFootprints = async (
+  signal: AbortSignal,
+  bounds: MapBounds,
+  force = false,
+): Promise<BuildingFetchResult> => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `building-levels:${boundsCachePart(bounds)}`,
     async () => {
@@ -1376,11 +1483,20 @@ const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds, f
     },
     { force },
   )
-
-  return (payload.elements ?? [])
+  const buildings = (payload.elements ?? [])
     .map(elementToBuildingFootprint)
     .filter((building): building is BuildingFootprint => Boolean(building))
-    .slice(0, 75_000)
+  const isCapped = buildings.length > BUILDING_STORE_LIMIT
+
+  return {
+    buildings: isCapped
+      ? [...buildings]
+          .sort((first, second) => buildingPriority(first) - buildingPriority(second))
+          .slice(0, BUILDING_STORE_LIMIT)
+      : buildings,
+    total: buildings.length,
+    isCapped,
+  }
 }
 
 const fetchCrimeIncidents = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
@@ -2233,6 +2349,34 @@ const formatMeters = (meters: number) => {
   return meters < 1000 ? `${Math.round(meters)} м` : `${(meters / 1000).toFixed(1)} км`
 }
 
+const loadStatusText = (stage: LoadStage) => {
+  if (stage.status === 'loading') {
+    return 'загрузка'
+  }
+
+  if (stage.status === 'cached') {
+    return stage.count === undefined ? 'кеш' : `кеш ${stage.count}`
+  }
+
+  if (stage.status === 'live') {
+    return stage.count === undefined ? 'готово' : String(stage.count)
+  }
+
+  if (stage.status === 'partial') {
+    return stage.detail ?? `${stage.count ?? 0}`
+  }
+
+  if (stage.status === 'empty') {
+    return 'нет'
+  }
+
+  if (stage.status === 'error') {
+    return 'ошибка'
+  }
+
+  return 'ожидание'
+}
+
 const nearestPoiDetail = (
   x: number,
   y: number,
@@ -2689,12 +2833,18 @@ const SuitabilityCanvasOverlay = ({
 }
 
 const MapClickSelector = ({
+  disabled,
   onSelect,
 }: {
+  disabled: boolean
   onSelect: (point: LatLng) => void
 }) => {
   useMapEvents({
     click(event) {
+      if (disabled) {
+        return
+      }
+
       onSelect({
         lat: event.latlng.lat,
         lng: event.latlng.lng,
@@ -2703,6 +2853,92 @@ const MapClickSelector = ({
   })
 
   return null
+}
+
+const MapRegionSelector = ({
+  active,
+  draftBounds,
+  selectedBounds,
+  onDraft,
+  onSelect,
+}: {
+  active: boolean
+  draftBounds: MapBounds | null
+  selectedBounds: MapBounds | null
+  onDraft: (bounds: MapBounds | null) => void
+  onSelect: (bounds: MapBounds) => void
+}) => {
+  const map = useMap()
+  const [startPoint, setStartPoint] = useState<LatLng | null>(null)
+
+  useEffect(() => {
+    if (active) {
+      map.dragging.disable()
+      map.getContainer().classList.add('region-selecting')
+    } else {
+      map.dragging.enable()
+      map.getContainer().classList.remove('region-selecting')
+    }
+
+    return () => {
+      map.dragging.enable()
+      map.getContainer().classList.remove('region-selecting')
+    }
+  }, [active, map])
+
+  useMapEvents({
+    mousedown(event) {
+      if (!active) {
+        return
+      }
+
+      const point = { lat: event.latlng.lat, lng: event.latlng.lng }
+
+      setStartPoint(point)
+      onDraft(normalizeBounds(point, point))
+    },
+    mousemove(event) {
+      if (!active || !startPoint) {
+        return
+      }
+
+      onDraft(normalizeBounds(startPoint, { lat: event.latlng.lat, lng: event.latlng.lng }))
+    },
+    mouseup(event) {
+      if (!active || !startPoint) {
+        return
+      }
+
+      const bounds = normalizeBounds(startPoint, { lat: event.latlng.lat, lng: event.latlng.lng })
+      const isMeaningful = bounds.north - bounds.south > 0.002 && bounds.east - bounds.west > 0.002
+
+      setStartPoint(null)
+      onDraft(null)
+
+      if (isMeaningful) {
+        onSelect(bounds)
+      }
+    },
+  })
+
+  const displayBounds = draftBounds ?? selectedBounds
+
+  return displayBounds ? (
+    <Rectangle
+      bounds={[
+        [displayBounds.south, displayBounds.west],
+        [displayBounds.north, displayBounds.east],
+      ]}
+      pathOptions={{
+        color: '#15181f',
+        dashArray: '7 6',
+        fillColor: '#15181f',
+        fillOpacity: 0.06,
+        opacity: 0.9,
+        weight: 2,
+      }}
+    />
+  ) : null
 }
 
 const MapViewportSync = ({ bounds }: { bounds: MapBounds }) => {
@@ -2726,7 +2962,9 @@ const App = () => {
   const [selectedCityId, setSelectedCityId] = useState('ma-boston')
   const [customCity, setCustomCity] = useState<CityConfig | null>(null)
   const [citySearchText, setCitySearchText] = useState('Boston')
+  const [zipSearchText, setZipSearchText] = useState('')
   const [isSearchingCity, setIsSearchingCity] = useState(false)
+  const [isSearchingZip, setIsSearchingZip] = useState(false)
   const [cellSizeMeters, setCellSizeMeters] = useState<number>(DEFAULT_CELL_SIZE_METERS)
   const [appliedCellSizeMeters, setAppliedCellSizeMeters] =
     useState<number>(DEFAULT_CELL_SIZE_METERS)
@@ -2738,6 +2976,8 @@ const App = () => {
   const [trafficSegments, setTrafficSegments] = useState<TrafficSegment[]>([])
   const [buildingFootprints, setBuildingFootprints] = useState<BuildingFootprint[]>([])
   const [buildingDataMode, setBuildingDataMode] = useState<BuildingDataMode>('empty')
+  const [buildingTotalCount, setBuildingTotalCount] = useState(0)
+  const [buildingIsCapped, setBuildingIsCapped] = useState(false)
   const [desiredFloor, setDesiredFloor] = useState(8)
   const [isLoading, setIsLoading] = useState(true)
   const [dataMode, setDataMode] = useState<DataMode>('sample')
@@ -2755,6 +2995,10 @@ const App = () => {
   const [activeProfileId, setActiveProfileId] = useState('balanced')
   const [refreshToken, setRefreshToken] = useState(0)
   const [forceRefreshZoneKey, setForceRefreshZoneKey] = useState<string | null>(null)
+  const [loadStages, setLoadStages] = useState<Record<LoadStageId, LoadStage>>(INITIAL_LOAD_STAGES)
+  const [isRegionSelectMode, setIsRegionSelectMode] = useState(false)
+  const [draftRegionBounds, setDraftRegionBounds] = useState<MapBounds | null>(null)
+  const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
 
   const availableCities = useMemo(
@@ -2785,6 +3029,45 @@ const App = () => {
     return [...cityNames].sort((a, b) => a.localeCompare(b))
   }, [availableCities, selectedState])
 
+  const setLoadStage = useCallback((id: LoadStageId, patch: Partial<LoadStage>) => {
+    setLoadStages((currentStages) => ({
+      ...currentStages,
+      [id]: {
+        ...currentStages[id],
+        ...patch,
+      },
+    }))
+  }, [])
+
+  const activateCustomCity = useCallback((city: CityConfig) => {
+    setCustomCity(city)
+    setSelectedCityId(city.id)
+    setSelectedPoint(city.center)
+    setSavedSites([])
+    setCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
+    setAppliedCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
+  }, [])
+
+  const applyRegionBounds = useCallback(
+    (bounds: MapBounds) => {
+      const center = centerForBounds(bounds)
+      const label = `Регион ${activeCity.city}`
+      const regionCity: CityConfig = {
+        id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
+        state: activeCity.state,
+        city: label,
+        bounds,
+        center,
+        checkpoints: genericCityCheckpoints(label, bounds, center),
+      }
+
+      setSelectedRegionBounds(bounds)
+      setIsRegionSelectMode(false)
+      activateCustomCity(regionCity)
+    },
+    [activeCity, activateCustomCity],
+  )
+
   useEffect(() => {
     const controller = new AbortController()
     const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
@@ -2808,11 +3091,43 @@ const App = () => {
           setCrimeDataMode(snapshot.crimeDataMode)
           setError(null)
           setIsLoading(false)
+          setLoadStage('osm', {
+            status: snapshot.dataMode === 'live' ? 'cached' : 'empty',
+            count: snapshot.pois.length,
+            detail: snapshot.dataMode === 'live' ? 'snapshot' : 'fallback',
+          })
+          setLoadStage('crime', {
+            status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
+            count: snapshot.crimeIncidents.length,
+            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'no local source',
+          })
+          setLoadStage('noise', {
+            status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
+            count: snapshot.noiseSegments.length,
+            detail: `${snapshot.landPenaltyAreas.length} caps`,
+          })
+          setLoadStage('traffic', {
+            status: snapshot.trafficSegments.length > 0 ? 'cached' : 'empty',
+            count: snapshot.trafficSegments.length,
+            detail: activeCity.state === 'MA' ? 'snapshot' : 'MA only',
+          })
           return
         }
       }
 
       setIsLoading(true)
+      setLoadStage('osm', { status: 'loading', count: undefined, detail: 'amenities + parks' })
+      setLoadStage('crime', {
+        status: activeCity.id === 'ma-boston' ? 'loading' : 'empty',
+        count: 0,
+        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'Boston only',
+      })
+      setLoadStage('noise', { status: 'loading', count: undefined, detail: 'roads + masks' })
+      setLoadStage('traffic', {
+        status: activeCity.state === 'MA' ? 'loading' : 'empty',
+        count: 0,
+        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'MA only',
+      })
     })
 
     Promise.allSettled([
@@ -2851,34 +3166,58 @@ const App = () => {
         if (poiResult.status === 'fulfilled' && poiResult.value.length > 0) {
           setPois(nextPois)
           setDataMode(nextDataMode)
+          setLoadStage('osm', { status: 'live', count: nextPois.length, detail: 'loaded' })
         } else {
           setPois(nextPois)
           setDataMode(nextDataMode)
+          setLoadStage('osm', {
+            status: nextPois.length > 0 ? 'partial' : 'error',
+            count: nextPois.length,
+            detail: nextPois.length > 0 ? 'fallback' : 'unavailable',
+          })
           errors.push('OSM')
         }
 
         if (crimeResult.status === 'fulfilled') {
           setCrimeIncidents(nextCrimeIncidents)
           setCrimeDataMode(nextCrimeDataMode)
+          setLoadStage('crime', {
+            status: nextCrimeIncidents.length > 0 ? 'live' : 'empty',
+            count: nextCrimeIncidents.length,
+            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'no local source',
+          })
         } else {
           setCrimeIncidents(nextCrimeIncidents)
           setCrimeDataMode(nextCrimeDataMode)
+          setLoadStage('crime', { status: 'error', count: 0, detail: 'unavailable' })
           errors.push('crime')
         }
 
         if (noiseResult.status === 'fulfilled') {
           setNoiseSegments(nextNoiseSegments)
           setLandPenaltyAreas(nextLandPenaltyAreas)
+          setLoadStage('noise', {
+            status: nextNoiseSegments.length > 0 || nextLandPenaltyAreas.length > 0 ? 'live' : 'empty',
+            count: nextNoiseSegments.length,
+            detail: `${nextLandPenaltyAreas.length} caps`,
+          })
         } else {
           setNoiseSegments(nextNoiseSegments)
           setLandPenaltyAreas(nextLandPenaltyAreas)
+          setLoadStage('noise', { status: 'error', count: 0, detail: 'unavailable' })
           errors.push('noise')
         }
 
         if (trafficResult.status === 'fulfilled') {
           setTrafficSegments(nextTrafficSegments)
+          setLoadStage('traffic', {
+            status: nextTrafficSegments.length > 0 ? 'live' : 'empty',
+            count: nextTrafficSegments.length,
+            detail: activeCity.state === 'MA' ? 'loaded' : 'MA only',
+          })
         } else {
           setTrafficSegments(nextTrafficSegments)
+          setLoadStage('traffic', { status: 'error', count: 0, detail: 'unavailable' })
           errors.push('traffic')
         }
 
@@ -2909,7 +3248,7 @@ const App = () => {
       })
 
     return () => controller.abort()
-  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken])
+  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -2920,36 +3259,74 @@ const App = () => {
     Promise.resolve()
       .then(() => {
         if (!isCurrent) {
-          return []
+          throw new Error('stale')
         }
 
         if (!forceRefresh) {
           const snapshot = readZoneSnapshot<BuildingDataSnapshot>(buildingSnapshotKey)
 
           if (snapshot) {
+            const snapshotTotal = snapshot.buildingTotalCount ?? snapshot.buildingFootprints.length
+            const snapshotIsCapped = snapshot.buildingIsCapped ?? false
+
             setBuildingFootprints(snapshot.buildingFootprints)
             setBuildingDataMode(snapshot.buildingDataMode)
+            setBuildingTotalCount(snapshotTotal)
+            setBuildingIsCapped(snapshotIsCapped)
+            setLoadStage('buildings', {
+              status:
+                snapshot.buildingDataMode === 'partial'
+                  ? 'partial'
+                  : snapshot.buildingDataMode === 'empty'
+                    ? 'empty'
+                    : 'cached',
+              count: snapshot.buildingFootprints.length,
+              detail: snapshotIsCapped
+                ? `${snapshot.buildingFootprints.length}/${snapshotTotal}`
+                : 'snapshot',
+            })
           } else {
             setBuildingFootprints([])
             setBuildingDataMode('loading')
+            setBuildingTotalCount(0)
+            setBuildingIsCapped(false)
+            setLoadStage('buildings', { status: 'loading', count: undefined, detail: 'OSM buildings' })
           }
         } else {
           setBuildingFootprints([])
           setBuildingDataMode('loading')
+          setBuildingTotalCount(0)
+          setBuildingIsCapped(false)
+          setLoadStage('buildings', { status: 'loading', count: undefined, detail: 'force refresh' })
         }
 
         return fetchBuildingFootprints(controller.signal, activeCity.bounds, forceRefresh)
       })
-      .then((buildings) => {
+      .then((result) => {
         if (controller.signal.aborted || !isCurrent) {
           return
         }
 
-        setBuildingFootprints(buildings)
-        setBuildingDataMode(buildings.length > 0 ? 'live' : 'empty')
+        const nextMode: Exclude<BuildingDataMode, 'loading'> = result.isCapped
+          ? 'partial'
+          : result.buildings.length > 0
+            ? 'live'
+            : 'empty'
+
+        setBuildingFootprints(result.buildings)
+        setBuildingDataMode(nextMode)
+        setBuildingTotalCount(result.total)
+        setBuildingIsCapped(result.isCapped)
+        setLoadStage('buildings', {
+          status: nextMode,
+          count: result.buildings.length,
+          detail: result.isCapped ? `${result.buildings.length}/${result.total}` : 'loaded',
+        })
         writeZoneSnapshot<BuildingDataSnapshot>(buildingSnapshotKey, {
-          buildingFootprints: buildings,
-          buildingDataMode: buildings.length > 0 ? 'live' : 'empty',
+          buildingFootprints: result.buildings,
+          buildingDataMode: nextMode,
+          buildingTotalCount: result.total,
+          buildingIsCapped: result.isCapped,
         })
       })
       .catch(() => {
@@ -2962,11 +3339,31 @@ const App = () => {
           : null
 
         if (snapshot) {
+          const snapshotTotal = snapshot.buildingTotalCount ?? snapshot.buildingFootprints.length
+          const snapshotIsCapped = snapshot.buildingIsCapped ?? false
+
           setBuildingFootprints(snapshot.buildingFootprints)
           setBuildingDataMode(snapshot.buildingDataMode)
+          setBuildingTotalCount(snapshotTotal)
+          setBuildingIsCapped(snapshotIsCapped)
+          setLoadStage('buildings', {
+            status:
+              snapshot.buildingDataMode === 'partial'
+                ? 'partial'
+                : snapshot.buildingDataMode === 'empty'
+                  ? 'empty'
+                  : 'cached',
+            count: snapshot.buildingFootprints.length,
+            detail: snapshotIsCapped
+              ? `${snapshot.buildingFootprints.length}/${snapshotTotal}`
+              : 'snapshot',
+          })
         } else {
           setBuildingFootprints([])
           setBuildingDataMode('empty')
+          setBuildingTotalCount(0)
+          setBuildingIsCapped(false)
+          setLoadStage('buildings', { status: 'error', count: 0, detail: 'unavailable' })
         }
       })
 
@@ -2974,7 +3371,7 @@ const App = () => {
       isCurrent = false
       controller.abort()
     }
-  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken])
+  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
 
   const refreshData = useCallback(() => {
     setIsLoading(true)
@@ -2989,12 +3386,8 @@ const App = () => {
 
     fetchCityConfig(selectedState, citySearchText)
       .then((city) => {
-        setCustomCity(city)
-        setSelectedCityId(city.id)
-        setSelectedPoint(city.center)
-        setSavedSites([])
-        setCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
-        setAppliedCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
+        setSelectedRegionBounds(null)
+        activateCustomCity(city)
       })
       .catch(() => {
         setError('Город не найден')
@@ -3002,7 +3395,24 @@ const App = () => {
       .finally(() => {
         setIsSearchingCity(false)
       })
-  }, [citySearchText, selectedState])
+  }, [activateCustomCity, citySearchText, selectedState])
+
+  const searchZip = useCallback(() => {
+    setIsSearchingZip(true)
+    setError(null)
+
+    fetchZipConfig(selectedState, zipSearchText)
+      .then((city) => {
+        setSelectedRegionBounds(null)
+        activateCustomCity(city)
+      })
+      .catch(() => {
+        setError('ZIP не найден')
+      })
+      .finally(() => {
+        setIsSearchingZip(false)
+      })
+  }, [activateCustomCity, selectedState, zipSearchText])
 
   const poisByCategory = useMemo(
     () =>
@@ -3101,6 +3511,42 @@ const App = () => {
     noiseSegments.length,
     trafficSegments.length,
   ])
+
+  const loadProgress = useMemo(() => {
+    const stages = Object.values(loadStages)
+    const scoreForStatus = (status: LoadStageStatus) => {
+      if (status === 'loading') {
+        return 0.35
+      }
+
+      if (status === 'idle') {
+        return 0
+      }
+
+      return 1
+    }
+    const score = stages.reduce((total, stage) => total + scoreForStatus(stage.status), 0)
+
+    return Math.round((score / stages.length) * 100)
+  }, [loadStages])
+
+  const loadingHeadline = useMemo(() => {
+    const loadingStage = Object.values(loadStages).find((stage) => stage.status === 'loading')
+
+    if (loadingStage) {
+      return `${loadingStage.label}: загрузка`
+    }
+
+    if (Object.values(loadStages).some((stage) => stage.status === 'error')) {
+      return 'Загрузка завершена с пропусками'
+    }
+
+    if (Object.values(loadStages).some((stage) => stage.status === 'partial')) {
+      return 'Загрузка завершена частично'
+    }
+
+    return 'Данные готовы'
+  }, [loadStages])
 
   const selectedAnalysis = useMemo(
     () =>
@@ -3209,6 +3655,8 @@ const App = () => {
         landPenaltyAreas: landPenaltyAreas.length,
         trafficSegments: trafficSegments.length,
         buildings: buildingFootprints.length,
+        buildingTotal: buildingTotalCount,
+        buildingsCapped: buildingIsCapped,
       },
     }
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
@@ -3225,6 +3673,8 @@ const App = () => {
     averageScore,
     appliedCellSizeMeters,
     buildingFootprints.length,
+    buildingIsCapped,
+    buildingTotalCount,
     crimeDataMode,
     dataMode,
     landPenaltyAreas.length,
@@ -3255,10 +3705,32 @@ const App = () => {
         </header>
 
         <div className="status-strip">
-          <span>{dataMode === 'live' ? 'OSM live' : 'Sample'}</span>
-          <span>{crimeDataMode === 'live' ? `${crimeIncidents.length} инц.` : 'крим. нет'}</span>
+          <span>{loadingHeadline}</span>
+          <span>{loadProgress}%</span>
           <span>{appliedCellSizeMeters} м grid</span>
         </div>
+
+        <section className="load-panel" aria-label="Статус загрузки">
+          <div className="load-head">
+            <strong>{loadingHeadline}</strong>
+            <span>{loadProgress}%</span>
+          </div>
+          <div className="progress-track">
+            <span style={{ width: `${loadProgress}%` }} />
+          </div>
+          <div className="load-grid">
+            {(Object.keys(loadStages) as LoadStageId[]).map((stageId) => {
+              const stage = loadStages[stageId]
+
+              return (
+                <div className={`load-row ${stage.status}`} key={stageId}>
+                  <span>{stage.label}</span>
+                  <strong>{loadStatusText(stage)}</strong>
+                </div>
+              )
+            })}
+          </div>
+        </section>
 
         <section className="panel-section">
           <div className="section-title">
@@ -3270,12 +3742,13 @@ const App = () => {
               <span>Штат</span>
               <select
                 value={selectedState}
-                onChange={(event) => {
-                  const nextState = event.target.value
+              onChange={(event) => {
+                const nextState = event.target.value
 
-                  setSelectedState(nextState)
-                  setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
-                }}
+                setSelectedState(nextState)
+                setSelectedRegionBounds(null)
+                setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
+              }}
               >
                 {US_STATES.map((state) => (
                   <option key={state.code} value={state.code}>
@@ -3317,6 +3790,50 @@ const App = () => {
             >
               {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
               Найти
+            </button>
+          </div>
+          <div className="resolution-row">
+            <input
+              className="inline-input"
+              inputMode="numeric"
+              placeholder="ZIP code"
+              type="text"
+              value={zipSearchText}
+              onChange={(event) => setZipSearchText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  searchZip()
+                }
+              }}
+            />
+            <button
+              className="text-button"
+              disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
+              type="button"
+              onClick={searchZip}
+            >
+              {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
+              ZIP
+            </button>
+          </div>
+          <div className="resolution-row">
+            <span>
+              {selectedRegionBounds
+                ? `Регион: ${boundsCachePart(selectedRegionBounds)}`
+                : isRegionSelectMode
+                  ? 'Зажмите и протяните по карте'
+                  : 'Регион не выделен'}
+            </span>
+            <button
+              className={`text-button ${isRegionSelectMode ? 'active' : ''}`}
+              type="button"
+              onClick={() => {
+                setDraftRegionBounds(null)
+                setIsRegionSelectMode((current) => !current)
+              }}
+            >
+              <Target size={15} />
+              Регион
             </button>
           </div>
           <label className="range-row">
@@ -3391,7 +3908,13 @@ const App = () => {
             <span>Желаемый этаж</span>
             <strong>{desiredFloor}</strong>
             <span>OSM здания</span>
-            <strong>{buildingDataMode === 'loading' ? '...' : buildingFootprints.length}</strong>
+            <strong>
+              {buildingDataMode === 'loading'
+                ? '...'
+                : buildingIsCapped
+                  ? `${buildingFootprints.length}/${buildingTotalCount}`
+                  : buildingFootprints.length}
+            </strong>
             <span>Ближайшее</span>
             <strong>
               {selectedBuilding.building
@@ -3678,8 +4201,17 @@ const App = () => {
             <span>Land caps</span>
             <strong>{landPenaltyAreas.length}</strong>
             <span>Buildings</span>
-            <strong>{buildingDataMode === 'loading' ? '...' : buildingFootprints.length}</strong>
+            <strong>
+              {buildingDataMode === 'loading'
+                ? '...'
+                : buildingIsCapped
+                  ? `${buildingFootprints.length}/${buildingTotalCount}`
+                  : buildingFootprints.length}
+            </strong>
           </div>
+          {buildingIsCapped ? (
+            <p className="data-note">Buildings partial: сохранены приоритетные {buildingFootprints.length} из {buildingTotalCount}.</p>
+          ) : null}
         </section>
 
         <footer className="panel-footer">
@@ -3719,7 +4251,14 @@ const App = () => {
           />
           <ZoomControl position="bottomright" />
           <MapViewportSync bounds={activeCity.bounds} />
-          <MapClickSelector onSelect={setSelectedPoint} />
+          <MapClickSelector disabled={isRegionSelectMode} onSelect={setSelectedPoint} />
+          <MapRegionSelector
+            active={isRegionSelectMode}
+            draftBounds={draftRegionBounds}
+            selectedBounds={selectedRegionBounds}
+            onDraft={setDraftRegionBounds}
+            onSelect={applyRegionBounds}
+          />
           <SuitabilityCanvasOverlay
             field={suitabilityField}
             mode={layerMode}

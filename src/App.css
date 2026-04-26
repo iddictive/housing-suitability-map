@@ -85,6 +85,12 @@
   opacity: 0.45;
 }
 
+.text-button.active {
+  border-color: #15181f;
+  background: #15181f;
+  color: #ffffff;
+}
+
 .spin {
   animation: spin 0.85s linear infinite;
 }
@@ -111,6 +117,89 @@
 
 .status-strip span + span {
   border-left: 1px solid #ddd9cf;
+}
+
+.load-panel {
+  display: grid;
+  gap: 9px;
+  border: 1px solid #ddd9cf;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.load-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: #15181f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.load-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.load-head span {
+  color: #5e6675;
+  font-weight: 820;
+}
+
+.progress-track {
+  overflow: hidden;
+  height: 7px;
+  border-radius: 999px;
+  background: #ece9e0;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #f07c24, #32a852, #1787e0);
+  transition: width 180ms ease;
+}
+
+.load-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.load-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  background: #f4f3ef;
+  padding: 6px 7px;
+  color: #5e6675;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.load-row strong {
+  color: #15181f;
+  font-weight: 820;
+}
+
+.load-row.loading strong,
+.load-row.partial strong {
+  color: #a95b14;
+}
+
+.load-row.error strong {
+  color: #b91c1c;
+}
+
+.load-row.live strong,
+.load-row.cached strong {
+  color: #247d47;
 }
 
 .metric-grid {
@@ -178,6 +267,7 @@
 
 .select-field input,
 .select-field select,
+.inline-input,
 .range-row select {
   width: 100%;
   min-width: 0;
@@ -189,6 +279,10 @@
   font-size: 13px;
   font-weight: 740;
   padding: 7px 8px;
+}
+
+.inline-input {
+  box-sizing: border-box;
 }
 
 .profile-button,
@@ -659,6 +753,10 @@
   width: 100%;
   height: 100svh;
   background: #e7e3d9;
+}
+
+.housing-map.region-selecting {
+  cursor: crosshair;
 }
 
 .leaflet-container {
