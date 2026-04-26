@@ -267,13 +267,14 @@ type SuitabilityField = {
   overlayExclusionAreas: LatLng[][]
   noGoOverlayAreas: LatLng[][]
   averageScore: number
+  evaluatedCellCount: number
   averageCrimeDensity: number
   noiseSegmentCount: number
   trafficSegmentCount: number
   landPenaltyAreaCount: number
 }
 
-type SpatialFactorField = Omit<SuitabilityField, 'averageScore' | 'scores'> & {
+type SpatialFactorField = Omit<SuitabilityField, 'averageScore' | 'evaluatedCellCount' | 'scores'> & {
   factorScores: Record<CriterionId, Float32Array>
   landScoreCapByCell: Float32Array
 }
@@ -805,6 +806,36 @@ const centerForBounds = (bounds: MapBounds): LatLng => ({
 
 const isUsZipCode = (value: string) => /^\d{5}(?:-\d{4})?$/.test(value.trim())
 
+const titleCasePlaceName = (value: string) =>
+  value
+    .trim()
+    .split(/\s+/)
+    .map((word) => {
+      if (/^[A-Z]{2,}$/.test(word) || /^\d/.test(word)) {
+        return word
+      }
+
+      return word
+        .split('-')
+        .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part))
+        .join('-')
+    })
+    .join(' ')
+
+const formatBoundsSummary = (bounds: MapBounds) => {
+  const latSpanKm = (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT / 1000
+  const lngSpanKm = (bounds.east - bounds.west) * metersPerDegreeLngForBounds(bounds) / 1000
+
+  return `${latSpanKm.toFixed(1)} x ${lngSpanKm.toFixed(1)} км`
+}
+
+const slugifyFilePart = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'region'
+
 type NominatimPlace = {
   lat: string
   lon: string
@@ -864,7 +895,7 @@ const cityConfigFromNominatimPlace = (
   )
 
   return {
-    id: `${idPrefix}-${stateCode}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    id: `${idPrefix}-${stateCode}-${slugifyFilePart(label)}`,
     state: stateCode,
     city: label,
     bounds: safeBounds,
@@ -875,7 +906,7 @@ const cityConfigFromNominatimPlace = (
 
 const fetchCityConfig = async (stateCode: string, cityName: string): Promise<CityConfig> => {
   const state = US_STATES.find((item) => item.code === stateCode)
-  const city = cityName.trim()
+  const city = titleCasePlaceName(cityName)
 
   if (!state || city.length === 0) {
     throw new Error('city required')
@@ -2329,6 +2360,7 @@ const mixSuitabilityField = (
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
     noGoOverlayAreas: spatialField.noGoOverlayAreas,
     averageScore: scoreTotal / Math.max(1, habitableCellCount),
+    evaluatedCellCount: habitableCellCount,
     averageCrimeDensity: spatialField.averageCrimeDensity,
     noiseSegmentCount: spatialField.noiseSegmentCount,
     trafficSegmentCount: spatialField.trafficSegmentCount,
@@ -2411,7 +2443,7 @@ const loadStatusText = (stage: LoadStage) => {
   }
 
   if (stage.status === 'empty') {
-    return 'нет'
+    return stage.detail === 'unsupported' ? 'н/д' : 'нет'
   }
 
   if (stage.status === 'error') {
@@ -3161,6 +3193,7 @@ const App = () => {
       CITY_OPTIONS[0],
     [availableCities, customCity, selectedCityId, selectedState],
   )
+  const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
   const activeZoneCacheKey = useMemo(
     () => `${activeCity.id}:${boundsCachePart(activeCity.bounds)}`,
     [activeCity],
@@ -3188,6 +3221,9 @@ const App = () => {
     setCustomCity(city)
     setSelectedCityId(city.id)
     setSelectedPoint(city.center)
+    if (!city.id.startsWith('region-')) {
+      setCitySearchText(city.city)
+    }
     setSavedSites([])
     setCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
     setAppliedCellSizeMeters(DEFAULT_CELL_SIZE_METERS)
@@ -3196,7 +3232,10 @@ const App = () => {
   const applyRegionBounds = useCallback(
     (bounds: MapBounds) => {
       const center = centerForBounds(bounds)
-      const label = `Регион ${activeCity.city}`
+      const baseLabel = activeCity.city.startsWith('Регион ')
+        ? activeCity.city.replace(/^Регион\s+/, '')
+        : activeCity.city
+      const label = `Регион ${titleCasePlaceName(baseLabel)}`
       const regionCity: CityConfig = {
         id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
         state: activeCity.state,
@@ -3244,7 +3283,7 @@ const App = () => {
           setLoadStage('crime', {
             status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
             count: snapshot.crimeIncidents.length,
-            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'no local source',
+            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'unsupported',
           })
           setLoadStage('noise', {
             status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
@@ -3254,7 +3293,7 @@ const App = () => {
           setLoadStage('traffic', {
             status: snapshot.trafficSegments.length > 0 ? 'cached' : 'empty',
             count: snapshot.trafficSegments.length,
-            detail: activeCity.state === 'MA' ? 'snapshot' : 'MA only',
+            detail: activeCity.state === 'MA' ? 'snapshot' : 'unsupported',
           })
           return
         }
@@ -3265,13 +3304,13 @@ const App = () => {
       setLoadStage('crime', {
         status: activeCity.id === 'ma-boston' ? 'loading' : 'empty',
         count: 0,
-        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'Boston only',
+        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'unsupported',
       })
       setLoadStage('noise', { status: 'loading', count: undefined, detail: 'roads + masks' })
       setLoadStage('traffic', {
         status: activeCity.state === 'MA' ? 'loading' : 'empty',
         count: 0,
-        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'MA only',
+        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'unsupported',
       })
     })
 
@@ -3337,7 +3376,7 @@ const App = () => {
           setLoadStage('crime', {
             status: nextCrimeIncidents.length > 0 ? 'live' : 'empty',
             count: nextCrimeIncidents.length,
-            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'no local source',
+            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'unsupported',
           })
         } else {
           setCrimeIncidents(nextCrimeIncidents)
@@ -3366,7 +3405,7 @@ const App = () => {
           setLoadStage('traffic', {
             status: nextTrafficSegments.length > 0 ? 'live' : 'empty',
             count: nextTrafficSegments.length,
-            detail: activeCity.state === 'MA' ? 'loaded' : 'MA only',
+            detail: activeCity.state === 'MA' ? 'loaded' : 'unsupported',
           })
         } else {
           setTrafficSegments(nextTrafficSegments)
@@ -3663,14 +3702,22 @@ const App = () => {
   const dataCoverage = useMemo(() => {
     const sourceScores = [
       dataMode === 'live' ? 1 : 0.42,
-      crimeDataMode === 'live' ? 1 : 0,
       noiseSegments.length > 0 ? 1 : 0,
-      trafficSegments.length > 0 ? 1 : 0,
       landPenaltyAreas.length > 0 ? 1 : 0,
     ]
 
+    if (activeCity.id === 'ma-boston') {
+      sourceScores.push(crimeDataMode === 'live' ? 1 : 0)
+    }
+
+    if (activeCity.state === 'MA') {
+      sourceScores.push(trafficSegments.length > 0 ? 1 : 0)
+    }
+
     return sourceScores.reduce((total, score) => total + score, 0) / sourceScores.length
   }, [
+    activeCity.id,
+    activeCity.state,
     crimeDataMode,
     dataMode,
     landPenaltyAreas.length,
@@ -3811,6 +3858,7 @@ const App = () => {
   }, [selectedAnalysis, selectedSiteId])
 
   const averageScore = suitabilityField.averageScore
+  const hasEvaluatedCells = suitabilityField.evaluatedCellCount > 0
 
   const exportReport = useCallback(() => {
     const report = {
@@ -3818,7 +3866,7 @@ const App = () => {
       profile: activeProfileId,
       location: { state: activeCity.state, city: activeCity.city },
       gridMeters: appliedCellSizeMeters,
-      averageScore,
+      averageScore: hasEvaluatedCells ? averageScore : null,
       selected: selectedAnalysis,
       shortlist: savedSites,
       topZones: neighborhoodScores.slice(0, 8),
@@ -3838,7 +3886,7 @@ const App = () => {
     const anchor = document.createElement('a')
 
     anchor.href = url
-    anchor.download = 'boston-housing-score-report.json'
+    anchor.download = `${activeCity.state.toLowerCase()}-${slugifyFilePart(activeCity.city)}-housing-score-report.json`
     anchor.click()
     URL.revokeObjectURL(url)
   }, [
@@ -3851,6 +3899,7 @@ const App = () => {
     buildingTotalCount,
     crimeDataMode,
     dataMode,
+    hasEvaluatedCells,
     landPenaltyAreas.length,
     neighborhoodScores,
     noiseSegments.length,
@@ -3864,7 +3913,7 @@ const App = () => {
       <aside className="control-panel" aria-label="Настройки карты">
         <header className="panel-header">
           <div>
-            <p className="eyebrow">Boston</p>
+            <p className="eyebrow">{activeCity.state}</p>
             <h1>Карта пригодности жилья</h1>
           </div>
           <button
@@ -3935,7 +3984,7 @@ const App = () => {
               <span>Город</span>
               <input
                 list="major-city-options"
-                placeholder={activeCity.city}
+                placeholder={activeCityLabel}
                 type="text"
                 value={citySearchText}
                 onChange={(event) => setCitySearchText(event.target.value)}
@@ -3954,7 +4003,7 @@ const App = () => {
           </div>
           <div className="resolution-row">
             <span>
-              Активно: {activeCity.city}, {activeCity.state}
+              Активно: {activeCityLabel}, {activeCity.state}
             </span>
             <button
               className="text-button"
@@ -3993,7 +4042,7 @@ const App = () => {
           <div className="resolution-row">
             <span>
               {selectedRegionBounds
-                ? `Регион: ${boundsCachePart(selectedRegionBounds)}`
+                ? `Регион: ${formatBoundsSummary(selectedRegionBounds)}`
                 : isRegionSelectMode
                   ? 'Зажмите и протяните по карте'
                   : 'Регион не выделен'}
@@ -4044,7 +4093,7 @@ const App = () => {
           <div className="metric-card">
             <BarChart3 size={16} />
             <span>Средний</span>
-            <strong>{Math.round(averageScore * 100)}</strong>
+            <strong>{hasEvaluatedCells ? Math.round(averageScore * 100) : 'н/д'}</strong>
           </div>
           <div className="metric-card">
             <Target size={16} />
