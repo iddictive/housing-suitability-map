@@ -59,6 +59,7 @@ type Poi = LatLng & {
   id: string
   name: string
   category: PoiCategory
+  shopKind?: string
   areaSqm?: number
   parkStrength?: number
   points?: LatLng[]
@@ -283,6 +284,7 @@ type SpatialFactorField = Omit<SuitabilityField, 'averageScore' | 'evaluatedCell
 type ProjectedPoi = {
   x: number
   y: number
+  shopKind?: string
   areaSqm: number
   parkStrength: number
 }
@@ -1079,9 +1081,9 @@ const elementToPoi = (element: OverpassElement, bounds = BOSTON_BOUNDS): Poi | n
   const category = categoryFromTags(element.tags)
   const lat = element.lat ?? element.center?.lat
   const lng = element.lon ?? element.center?.lon
-  const polygonRings = category === 'parks' ? ringsFromOverpassElement(element) : []
+  const polygonRings = category === 'parks' || category === 'groceries' ? ringsFromOverpassElement(element) : []
   const areaSqm =
-    category === 'parks'
+    category === 'parks' || category === 'groceries'
       ? polygonRings.reduce((total, points) => total + approximatePolygonAreaSqm(points, bounds), 0)
       : 0
 
@@ -1092,6 +1094,7 @@ const elementToPoi = (element: OverpassElement, bounds = BOSTON_BOUNDS): Poi | n
   return {
     id: `${element.type}-${element.id}`,
     category,
+    shopKind: element.tags?.shop,
     lat,
     lng,
     name: element.tags?.name ?? CATEGORY_META[category].label,
@@ -1795,6 +1798,7 @@ const projectPoi = (
   metersPerDegreeLng = metersPerDegreeLngForBounds(bounds),
 ): ProjectedPoi => ({
   ...latLngToMeters(poi, bounds, metersPerDegreeLng),
+  shopKind: poi.shopKind,
   areaSqm: poi.areaSqm ?? 0,
   parkStrength: poi.parkStrength ?? parkStrengthFromArea(poi.areaSqm),
 })
@@ -1821,6 +1825,63 @@ const parkInfluenceScore = (x: number, y: number, parks: ProjectedPoi[], criteri
 
   return PARK_SCORE_FLOOR + bestScore * (1 - PARK_SCORE_FLOOR)
 }
+
+const grocerySupplyWeight = (grocery: Pick<ProjectedPoi, 'areaSqm' | 'shopKind'>) => {
+  if (grocery.shopKind === 'supermarket') {
+    if (grocery.areaSqm >= 2500) {
+      return 5
+    }
+
+    if (grocery.areaSqm >= 1200) {
+      return 4
+    }
+
+    return 3
+  }
+
+  if (grocery.shopKind === 'grocery') {
+    return grocery.areaSqm >= 450 ? 1.5 : 1
+  }
+
+  return 0.85
+}
+
+const grocerySupplyDetail = (
+  x: number,
+  y: number,
+  groceries: ProjectedPoi[],
+  criterion: Criterion,
+) => {
+  const reachMeters = criterion.thresholdKm * 1000
+  let weightedSupply = 0
+  let nearbyCount = 0
+  let nearestDistance = Number.POSITIVE_INFINITY
+
+  for (const grocery of groceries) {
+    const distanceMeters = Math.hypot(x - grocery.x, y - grocery.y)
+
+    if (distanceMeters < nearestDistance) {
+      nearestDistance = distanceMeters
+    }
+
+    if (distanceMeters > reachMeters) {
+      continue
+    }
+
+    nearbyCount += 1
+    weightedSupply += grocerySupplyWeight(grocery) * Math.pow(1 - distanceMeters / reachMeters, 1.35)
+  }
+
+  return {
+    nearbyCount,
+    nearestDistance,
+    score: clamp(weightedSupply / 5),
+    weightedSupply,
+  }
+}
+
+const grocerySupplyScore = (x: number, y: number, groceries: ProjectedPoi[], criterion: Criterion) =>
+  grocerySupplyDetail(x, y, groceries, criterion).score
 
 const pointToSegmentDistanceMeters = (
   x: number,
@@ -2226,8 +2287,10 @@ const buildSpatialFactorField = (
         projectedPois.parks,
         criteriaById.parks,
       )
-      factorScores.groceries[index] = scoreByDistance(
-        nearestMeters(x, y, projectedPois.groceries) / 1000,
+      factorScores.groceries[index] = grocerySupplyScore(
+        x,
+        y,
+        projectedPois.groceries,
         criteriaById.groceries,
       )
       factorScores.transit[index] = scoreByDistance(
@@ -2439,6 +2502,51 @@ const colorForScore = (score: number) => {
   return `rgb(${red} ${green} ${blue})`
 }
 
+const isDrawableOverlayCell = (field: SuitabilityField, index: number) =>
+  Boolean(field.overlayInclusionMaskByCell[index]) &&
+  !field.overlayExclusionMaskByCell[index] &&
+  !field.noGoMaskByCell[index]
+
+const smoothedCellScore = (field: SuitabilityField, row: number, column: number) => {
+  const sourceIndex = row * field.cols + column
+
+  if (!isDrawableOverlayCell(field, sourceIndex)) {
+    return field.scores[sourceIndex]
+  }
+
+  let weightedScore = 0
+  let totalWeight = 0
+
+  for (let dy = -2; dy <= 2; dy += 1) {
+    for (let dx = -2; dx <= 2; dx += 1) {
+      const sourceRow = row + dy
+      const sourceColumn = column + dx
+
+      if (
+        sourceRow < 0 ||
+        sourceRow >= field.rows ||
+        sourceColumn < 0 ||
+        sourceColumn >= field.cols
+      ) {
+        continue
+      }
+
+      const index = sourceRow * field.cols + sourceColumn
+
+      if (!isDrawableOverlayCell(field, index)) {
+        continue
+      }
+
+      const weight = Math.exp(-(dx * dx + dy * dy) / 3.2)
+
+      weightedScore += field.scores[index] * weight
+      totalWeight += weight
+    }
+  }
+
+  return totalWeight > 0 ? weightedScore / totalWeight : field.scores[sourceIndex]
+}
+
 const labelForScore = (score: number) => {
   const normalizedScore = Math.round(clamp(score) * 100)
   const band = SCORE_BANDS.find(
@@ -2647,7 +2755,13 @@ const analyzePoint = (
     poisByCategory.parks.map((poi) => projectPoi(poi, bounds, field.metersPerDegreeLng)),
     criteriaById.parks,
   )
-  const groceryScore = scoreByDistance(nearestGrocery.distance / 1000, criteriaById.groceries)
+  const grocerySupply = grocerySupplyDetail(
+    meters.x,
+    meters.y,
+    poisByCategory.groceries.map((poi) => projectPoi(poi, bounds, field.metersPerDegreeLng)),
+    criteriaById.groceries,
+  )
+  const groceryScore = grocerySupply.score
   const nightlifeScore = scoreByDistance(nearestNightlife.distance / 1000, criteriaById.noise)
   const transportScore = Number.isFinite(nearestTransport)
     ? clamp(0.38 + Math.pow(clamp(nearestTransport / 520), 0.7) * 0.62)
@@ -2689,7 +2803,7 @@ const analyzePoint = (
       id: 'groceries',
       label: 'Магазины',
       score: groceryScore,
-      detail: `${nearestGrocery.poi?.name ?? 'Магазин'} · ${formatMeters(nearestGrocery.distance)}`,
+      detail: `${nearestGrocery.poi?.name ?? 'Магазин'} · ${formatMeters(nearestGrocery.distance)}, ${grocerySupply.nearbyCount} рядом`,
     },
     {
       id: 'noise',
@@ -2826,14 +2940,10 @@ const SuitabilityCanvasOverlay = ({
     for (let row = 0; row < field.rows; row += 1) {
       for (let column = 0; column < field.cols; column += 1) {
         const fieldIndex = row * field.cols + column
-        const baseScore = field.scores[fieldIndex]
+        const baseScore = smoothedCellScore(field, row, column)
         const index = fieldIndex * 4
 
-        if (
-          !field.overlayInclusionMaskByCell[fieldIndex] ||
-          field.overlayExclusionMaskByCell[fieldIndex] ||
-          field.noGoMaskByCell[fieldIndex]
-        ) {
+        if (!isDrawableOverlayCell(field, fieldIndex)) {
           image.data[index + 3] = 0
           continue
         }
