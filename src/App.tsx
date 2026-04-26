@@ -2278,8 +2278,9 @@ const scoreAt = (field: SuitabilityField, point: LatLng) => {
   const meters = latLngToMeters(point, fieldBounds(field), field.metersPerDegreeLng)
   const column = clamp(Math.floor(meters.x / field.cellSizeMeters), 0, field.cols - 1)
   const row = clamp(Math.floor(meters.y / field.cellSizeMeters), 0, field.rows - 1)
+  const index = row * field.cols + column
 
-  return field.scores[row * field.cols + column]
+  return isScorablePointCell(field, index) ? field.scores[index] : 0
 }
 
 const cellIndexAtPoint = (field: SuitabilityField, point: LatLng) => {
@@ -2319,8 +2320,11 @@ const isDrawableOverlayCell = (field: SuitabilityField, index: number) =>
   !field.overlayExclusionMaskByCell[index] &&
   !field.noGoMaskByCell[index]
 
-const isSmoothingSourceCell = (field: SuitabilityField, index: number) =>
+const isScorablePointCell = (field: SuitabilityField, index: number) =>
   isDrawableOverlayCell(field, index) && !field.roadMaskByCell[index]
+
+const isSmoothingSourceCell = (field: SuitabilityField, index: number) =>
+  isScorablePointCell(field, index)
 
 const smoothedCellScore = (field: SuitabilityField, row: number, column: number) => {
   const sourceIndex = row * field.cols + column
@@ -2594,13 +2598,20 @@ const analyzePoint = (
   )
   const crimeScore = crimeScoreAtPoint(point, crimeIncidents, field.averageCrimeDensity, bounds, field.metersPerDegreeLng)
   const landCap = landCapAtPoint(meters.x, meters.y, landPenaltyAreas, bounds, field.metersPerDegreeLng)
-  const landFactorScore = landCap < 1 ? landCap : 0.86
   const hasOverlayInclusion = Boolean(field.overlayInclusionMaskByCell[cellIndex])
   const hasOverlayExclusion = Boolean(field.overlayExclusionMaskByCell[cellIndex])
   const hasResidentialEvidence = Boolean(field.residentialCandidateMaskByCell[cellIndex])
   const isNoGo = Boolean(field.noGoMaskByCell[cellIndex])
   const isWater = Boolean(field.waterMaskByCell[cellIndex])
   const isRoad = Boolean(field.roadMaskByCell[cellIndex])
+  const isUnscorableLand = !hasOverlayInclusion || isWater || isRoad || isNoGo || hasOverlayExclusion
+  const landFactorScore = isUnscorableLand
+    ? 0
+    : hasResidentialEvidence
+      ? landCap < 1
+        ? landCap
+        : 0.86
+      : Math.min(landCap, 0.42)
   const pointLandStatus = isWater
     ? 'вода'
     : isRoad
@@ -2682,10 +2693,10 @@ const analyzePoint = (
   const sortedFactors = [...factors].sort((a, b) => a.score - b.score)
   const worstFactor = sortedFactors[0]
   const bestFactor = sortedFactors[sortedFactors.length - 1]
-  const riskScore = 1 - Math.min(noiseScore, crimeScore, landCap)
+  const riskScore = 1 - Math.min(noiseScore, crimeScore, landFactorScore)
   const opportunityScore = clamp(score * 0.72 + transitScore * 0.14 + groceryScore * 0.14 - riskScore * 0.18)
   const confidence = clamp(dataCoverage * 0.72 + (landCap < 1 ? 0.08 : 0.16) + (crimeIncidents.length > 0 ? 0.12 : 0))
-  const landConfidence = isWater || isNoGo || hasOverlayExclusion ? 0 : hasResidentialEvidence ? 1 : hasOverlayInclusion ? 0.55 : 0.35
+  const landConfidence = isUnscorableLand ? 0 : hasResidentialEvidence ? 1 : 0.55
   const adjustedConfidence = Math.min(confidence, clamp(0.42 + landConfidence * 0.58))
   const dataCompleteness: PointDataItem[] = [
     {
