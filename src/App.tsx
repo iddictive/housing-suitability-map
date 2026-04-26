@@ -37,8 +37,6 @@ import {
 import {
   AIRPORT_HARD_NOISE_METERS,
   AIRPORT_SOFT_NOISE_METERS,
-  API_CACHE_TTL_MS,
-  API_CACHE_VERSION,
   BOSTON_BOUNDS,
   BUILDING_MATCH_RADIUS_METERS,
   BUILDING_STORE_LIMIT,
@@ -50,12 +48,9 @@ import {
   FALLBACK_POIS,
   INITIAL_CRITERIA,
   INITIAL_LOAD_STAGES,
-  LAND_EVIDENCE_BUFFER_METERS,
   MAJOR_CITIES_BY_STATE,
   MAJOR_ROAD_HARD_NOISE_METERS,
   MAJOR_ROAD_SOFT_NOISE_METERS,
-  MAX_CITY_LAT_SPAN,
-  MAX_CITY_LNG_SPAN,
   METERS_PER_DEGREE_LAT,
   PARK_SCORE_FLOOR,
   RAIL_HARD_NOISE_METERS,
@@ -66,8 +61,30 @@ import {
   SCORE_BANDS,
   TRAFFIC_MAX_AADT,
   US_STATES,
-  ZONE_SNAPSHOT_TTL_MS,
 } from './domain/config'
+import {
+  boundsCachePart,
+  cachedRequest,
+  fetchOverpassJson,
+  readZoneSnapshot,
+  writeZoneSnapshot,
+  zoneSnapshotKey,
+} from './domain/apiCache'
+import {
+  approximatePolygonAreaSqm,
+  boundsToBbox,
+  centerForBounds,
+  clamp,
+  fieldBounds,
+  genericCityCheckpoints,
+  latLngToMeters,
+  limitBoundsAroundCenter,
+  metersPerDegreeLngForBounds,
+  nearestMeters,
+  normalizeBounds,
+  pointInPolygon,
+  pointToSegmentDistanceMeters,
+} from './domain/geo'
 import type {
   ArcGisPolylineFeature,
   BuildingDataMode,
@@ -122,181 +139,11 @@ const CATEGORY_META: Record<
   transit: { label: 'Транспорт', color: '#635bff', icon: TrainFront },
 }
 
-const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value))
-
-const metersPerDegreeLngForBounds = (bounds: MapBounds) => {
-  const referenceLat = (bounds.south + bounds.north) / 2
-
-  return METERS_PER_DEGREE_LAT * Math.cos((referenceLat * Math.PI) / 180)
-}
-
-const latLngToMeters = (
-  point: LatLng,
-  bounds = BOSTON_BOUNDS,
-  metersPerDegreeLng = metersPerDegreeLngForBounds(bounds),
-) => ({
-  x: (point.lng - bounds.west) * metersPerDegreeLng,
-  y: (bounds.north - point.lat) * METERS_PER_DEGREE_LAT,
-})
-
-const fieldBounds = (field: Pick<SuitabilityField, 'south' | 'west' | 'north' | 'east'>): MapBounds => ({
-  south: field.south,
-  west: field.west,
-  north: field.north,
-  east: field.east,
-})
-
-const approximatePolygonAreaSqm = (points: LatLng[], bounds = BOSTON_BOUNDS) => {
-  if (points.length < 3) {
-    return 0
-  }
-
-  const metersPerDegreeLng = metersPerDegreeLngForBounds(bounds)
-  let area = 0
-  const projected = points.map((point) => latLngToMeters(point, bounds, metersPerDegreeLng))
-
-  for (let index = 0; index < projected.length; index += 1) {
-    const current = projected[index]
-    const next = projected[(index + 1) % projected.length]
-
-    area += current.x * next.y - next.x * current.y
-  }
-
-  return Math.abs(area) / 2
-}
-
 const parkStrengthFromArea = (areaSqm = 0) => {
   const edgeEquivalent = Math.sqrt(Math.max(0, areaSqm))
 
   return clamp((edgeEquivalent - 40) / 320, 0.05, 1)
 }
-
-const memoryApiCache = new Map<string, unknown>()
-
-const apiCacheKey = (key: string) => `${API_CACHE_VERSION}:${key}`
-
-const boundsCachePart = (bounds: MapBounds) =>
-  `${bounds.south.toFixed(4)},${bounds.west.toFixed(4)},${bounds.north.toFixed(4)},${bounds.east.toFixed(4)}`
-
-const readApiCache = <T,>(key: string): T | null => {
-  const normalizedKey = apiCacheKey(key)
-
-  if (memoryApiCache.has(normalizedKey)) {
-    return memoryApiCache.get(normalizedKey) as T
-  }
-
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  try {
-    const raw = window.localStorage.getItem(normalizedKey)
-
-    if (!raw) {
-      return null
-    }
-
-    const cached = JSON.parse(raw) as { expiresAt: number; value: T }
-
-    if (cached.expiresAt < Date.now()) {
-      window.localStorage.removeItem(normalizedKey)
-      return null
-    }
-
-    memoryApiCache.set(normalizedKey, cached.value)
-    return cached.value
-  } catch {
-    return null
-  }
-}
-
-const writeApiCache = <T,>(key: string, value: T, ttlMs = API_CACHE_TTL_MS) => {
-  const normalizedKey = apiCacheKey(key)
-
-  memoryApiCache.set(normalizedKey, value)
-
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  try {
-    window.localStorage.setItem(
-      normalizedKey,
-      JSON.stringify({
-        expiresAt: Date.now() + ttlMs,
-        value,
-      }),
-    )
-  } catch {
-    // Large city datasets may exceed localStorage. Memory cache still covers this session.
-  }
-}
-
-const cachedRequest = async <T,>(
-  key: string,
-  request: () => Promise<T>,
-  options: { force?: boolean } = {},
-) => {
-  const cached = options.force ? null : readApiCache<T>(key)
-
-  if (cached) {
-    return cached
-  }
-
-  const value = await request()
-
-  writeApiCache(key, value)
-  return value
-}
-
-const zoneSnapshotKey = (kind: 'main' | 'buildings', city: CityConfig) =>
-  `zone-snapshot:${kind}:${city.id}:${boundsCachePart(city.bounds)}`
-
-const readZoneSnapshot = <T,>(key: string) => readApiCache<T>(key)
-
-const writeZoneSnapshot = <T,>(key: string, value: T) => {
-  writeApiCache(key, value, ZONE_SNAPSHOT_TTL_MS)
-}
-
-const boundsToBbox = (bounds: MapBounds) =>
-  `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`
-
-const limitBoundsAroundCenter = (bounds: MapBounds, center: LatLng): MapBounds => {
-  const latSpan = Math.min(bounds.north - bounds.south, MAX_CITY_LAT_SPAN)
-  const lngSpan = Math.min(bounds.east - bounds.west, MAX_CITY_LNG_SPAN)
-
-  return {
-    south: center.lat - latSpan / 2,
-    north: center.lat + latSpan / 2,
-    west: center.lng - lngSpan / 2,
-    east: center.lng + lngSpan / 2,
-  }
-}
-
-const genericCityCheckpoints = (city: string, bounds: MapBounds, center: LatLng) => {
-  const latSpan = bounds.north - bounds.south
-  const lngSpan = bounds.east - bounds.west
-
-  return [
-    { name: `${city} center`, ...center },
-    { name: `${city} north`, lat: center.lat + latSpan * 0.22, lng: center.lng },
-    { name: `${city} south`, lat: center.lat - latSpan * 0.22, lng: center.lng },
-    { name: `${city} east`, lat: center.lat, lng: center.lng + lngSpan * 0.22 },
-    { name: `${city} west`, lat: center.lat, lng: center.lng - lngSpan * 0.22 },
-  ]
-}
-
-const normalizeBounds = (start: LatLng, end: LatLng): MapBounds => ({
-  south: Math.min(start.lat, end.lat),
-  west: Math.min(start.lng, end.lng),
-  north: Math.max(start.lat, end.lat),
-  east: Math.max(start.lng, end.lng),
-})
-
-const centerForBounds = (bounds: MapBounds): LatLng => ({
-  lat: (bounds.south + bounds.north) / 2,
-  lng: (bounds.west + bounds.east) / 2,
-})
 
 const isUsZipCode = (value: string) => /^\d{5}(?:-\d{4})?$/.test(value.trim())
 
@@ -520,6 +367,12 @@ const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
   relation["landuse"~"^(railway|industrial|commercial|retail|cemetery)$"](${bbox});
   way["landuse"~"^(residential|allotments|education|institutional|recreation_ground|village_green)$"](${bbox});
   relation["landuse"~"^(residential|allotments|education|institutional|recreation_ground|village_green)$"](${bbox});
+  way["landuse"~"^(grass|forest|meadow|greenfield)$"](${bbox});
+  relation["landuse"~"^(grass|forest|meadow|greenfield)$"](${bbox});
+  way["leisure"~"^(park|garden|recreation_ground|nature_reserve|playground|sports_centre|pitch)$"](${bbox});
+  relation["leisure"~"^(park|garden|recreation_ground|nature_reserve|playground|sports_centre|pitch)$"](${bbox});
+  way["natural"~"^(wood|scrub|grassland|heath|wetland)$"](${bbox});
+  relation["natural"~"^(wood|scrub|grassland|heath|wetland)$"](${bbox});
   way["place"~"^(island|islet)$"](${bbox});
   relation["place"~"^(island|islet)$"](${bbox});
   way["amenity"="parking"](${bbox});
@@ -754,8 +607,8 @@ const landPenaltyTemplateFromTags = (
 
   if (tags.highway) {
     return {
-      kind: 'land',
-      maxScore: 1,
+      kind: 'road',
+      maxScore: 0,
     }
   }
 
@@ -790,13 +643,25 @@ const landPenaltyTemplateFromTags = (
     }
   }
 
-  if (
-    ['allotments', 'recreation_ground', 'village_green'].includes(tags.landuse ?? '') ||
-    ['island', 'islet'].includes(tags.place ?? '')
-  ) {
+  if (['island', 'islet'].includes(tags.place ?? '')) {
     return {
       kind: 'land',
       maxScore: 1,
+    }
+  }
+
+  if (
+    ['allotments', 'grass', 'forest', 'meadow', 'greenfield', 'recreation_ground', 'village_green'].includes(
+      tags.landuse ?? '',
+    ) ||
+    ['park', 'garden', 'recreation_ground', 'nature_reserve', 'playground', 'sports_centre', 'pitch'].includes(
+      tags.leisure ?? '',
+    ) ||
+    ['wood', 'scrub', 'grassland', 'heath', 'wetland'].includes(tags.natural ?? '')
+  ) {
+    return {
+      kind: 'open-space',
+      maxScore: 0,
     }
   }
 
@@ -812,23 +677,17 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
   }
 
   const geometryPoints = element.geometry?.map(overpassPointToLatLng) ?? []
-  const isLinearLandEvidence =
-    template.kind === 'land' &&
-    tags.highway !== undefined &&
+  const isLinearRoad =
+    template.kind === 'road' &&
+    geometryPoints.length >= 2 &&
+    !sameLatLng(geometryPoints[0], geometryPoints[geometryPoints.length - 1])
+  const isLinearWater =
+    template.kind === 'water' &&
     geometryPoints.length >= 2 &&
     !sameLatLng(geometryPoints[0], geometryPoints[geometryPoints.length - 1])
 
-  if (isLinearLandEvidence) {
+  if (isLinearRoad) {
     return [
-      {
-        id: `${element.type}-${element.id}-land-line`,
-        name: tags.name ?? tags.highway ?? template.kind,
-        kind: 'land',
-        points: geometryPoints,
-        maxScore: template.maxScore,
-        isLinear: true,
-        bufferMeters: LAND_EVIDENCE_BUFFER_METERS,
-      },
       {
         id: `${element.type}-${element.id}-road-surface`,
         name: tags.name ?? tags.highway ?? 'road',
@@ -837,6 +696,27 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
         maxScore: 0,
         isLinear: true,
         bufferMeters: ROAD_SURFACE_NO_GO_BUFFER_METERS,
+      },
+    ]
+  }
+
+  if (isLinearWater) {
+    const bufferMeters =
+      tags.waterway === 'river' || tags.waterway === 'riverbank'
+        ? 35
+        : tags.waterway === 'dock'
+          ? 28
+          : 18
+
+    return [
+      {
+        id: `${element.type}-${element.id}-water-line`,
+        name: tags.name ?? tags.waterway ?? 'water',
+        kind: 'water',
+        points: geometryPoints,
+        maxScore: 0,
+        isLinear: true,
+        bufferMeters,
       },
     ]
   }
@@ -954,22 +834,7 @@ const elementToBuildingFootprint = (element: OverpassElement): BuildingFootprint
 const fetchPois = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `pois:${boundsCachePart(bounds)}`,
-    async () => {
-      const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=UTF-8',
-        },
-        body: buildOverpassQuery(bounds),
-        signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`Overpass ${response.status}`)
-      }
-
-      return (await response.json()) as { elements?: OverpassElement[] }
-    },
+    () => fetchOverpassJson(buildOverpassQuery(bounds), signal, 'pois'),
     { force },
   )
   const seen = new Set<string>()
@@ -992,22 +857,7 @@ const fetchPois = async (signal: AbortSignal, bounds: MapBounds, force = false) 
 const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `masks-noise:${boundsCachePart(bounds)}`,
-    async () => {
-      const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=UTF-8',
-        },
-        body: buildNoiseSegmentsQuery(bounds),
-        signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`Overpass noise ${response.status}`)
-      }
-
-      return (await response.json()) as { elements?: OverpassElement[] }
-    },
+    () => fetchOverpassJson(buildNoiseSegmentsQuery(bounds), signal, 'noise'),
     { force },
   )
 
@@ -1044,22 +894,7 @@ const fetchBuildingFootprints = async (
 ): Promise<BuildingFetchResult> => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `building-levels:${boundsCachePart(bounds)}`,
-    async () => {
-      const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=UTF-8',
-        },
-        body: buildBuildingLevelsQuery(bounds),
-        signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`Overpass buildings ${response.status}`)
-      }
-
-      return (await response.json()) as { elements?: OverpassElement[] }
-    },
+    () => fetchOverpassJson(buildBuildingLevelsQuery(bounds), signal, 'buildings'),
     { force },
   )
   const buildings = (payload.elements ?? [])
@@ -1274,33 +1109,6 @@ const scoreByDistance = (distance: number, criterion: Criterion) => {
   return criterion.mode === 'nearIsGood' ? 1 - normalized : normalized
 }
 
-const nearestMeters = (
-  x: number,
-  y: number,
-  points: Array<{
-    x: number
-    y: number
-  }>,
-) => {
-  if (points.length === 0) {
-    return Number.POSITIVE_INFINITY
-  }
-
-  let nearestSquared = Number.POSITIVE_INFINITY
-
-  for (const point of points) {
-    const dx = x - point.x
-    const dy = y - point.y
-    const squared = dx * dx + dy * dy
-
-    if (squared < nearestSquared) {
-      nearestSquared = squared
-    }
-  }
-
-  return Math.sqrt(nearestSquared)
-}
-
 const projectPoi = (
   poi: Poi,
   bounds = BOSTON_BOUNDS,
@@ -1391,61 +1199,6 @@ const grocerySupplyDetail = (
 
 const grocerySupplyScore = (x: number, y: number, groceries: ProjectedPoi[], criterion: Criterion) =>
   grocerySupplyDetail(x, y, groceries, criterion).score
-
-const pointToSegmentDistanceMeters = (
-  x: number,
-  y: number,
-  start: {
-    x: number
-    y: number
-  },
-  end: {
-    x: number
-    y: number
-  },
-) => {
-  const dx = end.x - start.x
-  const dy = end.y - start.y
-  const lengthSquared = dx * dx + dy * dy
-
-  if (lengthSquared === 0) {
-    return Math.hypot(x - start.x, y - start.y)
-  }
-
-  const progress = clamp(((x - start.x) * dx + (y - start.y) * dy) / lengthSquared)
-  const projectedX = start.x + progress * dx
-  const projectedY = start.y + progress * dy
-
-  return Math.hypot(x - projectedX, y - projectedY)
-}
-
-const pointInPolygon = (
-  x: number,
-  y: number,
-  polygon: Array<{
-    x: number
-    y: number
-  }>,
-) => {
-  let inside = false
-
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
-    const currentPoint = polygon[index]
-    const previousPoint = polygon[previous]
-    const intersects =
-      currentPoint.y > y !== previousPoint.y > y &&
-      x <
-        ((previousPoint.x - currentPoint.x) * (y - currentPoint.y)) /
-          (previousPoint.y - currentPoint.y) +
-          currentPoint.x
-
-    if (intersects) {
-      inside = !inside
-    }
-  }
-
-  return inside
-}
 
 const noiseSegmentRadius = (kind: NoiseSourceKind) => {
   if (kind === 'airport') {
@@ -1559,12 +1312,34 @@ const buildSpatialFactorField = (
     ...landPenaltyAreas
       .filter((area) => area.kind === 'water' && area.points.length >= 3)
       .map((area) => area.points),
+    ...landPenaltyAreas
+      .filter((area) => area.kind === 'open-space' && area.points.length >= 3)
+      .map((area) => area.points),
     ...poisByCategory.parks
       .filter((park) => park.points && park.points.length >= 3)
       .map((park) => park.points ?? []),
   ]
+  const overlayExclusionLines = landPenaltyAreas
+    .filter(
+      (area): area is LandPenaltyArea & { kind: 'road' | 'water'; bufferMeters: number } =>
+        Boolean(area.isLinear) &&
+        (area.kind === 'road' || area.kind === 'water') &&
+        Boolean(area.bufferMeters) &&
+        area.points.length >= 2,
+    )
+    .map((area) => ({
+      points: area.points,
+      bufferMeters: area.bufferMeters,
+      kind: area.kind,
+    }))
   const noGoOverlayAreas = landPenaltyAreas
-    .filter((area) => !area.isLinear && !['water', 'road'].includes(area.kind) && area.maxScore <= 0 && area.points.length >= 3)
+    .filter(
+      (area) =>
+        !area.isLinear &&
+        !(['water', 'road', 'open-space'] as LandPenaltyArea['kind'][]).includes(area.kind) &&
+        area.maxScore <= 0 &&
+        area.points.length >= 3,
+    )
     .map((area) => area.points)
   const projectedParkAreas = poisByCategory.parks
     .filter((park) => park.points && park.points.length >= 3)
@@ -1729,23 +1504,23 @@ const buildSpatialFactorField = (
         if (area.kind === 'water') {
           waterMaskByCell[index] = 1
           overlayExclusionMaskByCell[index] = 1
+        } else if (area.kind === 'road') {
+          roadMaskByCell[index] = 1
+        } else if (area.kind === 'open-space') {
+          overlayExclusionMaskByCell[index] = 1
         } else {
           overlayInclusionMaskByCell[index] = 1
-
-          if (area.kind === 'road') {
-            roadMaskByCell[index] = 1
-          }
 
           if (area.kind === 'residential') {
             residentialCandidateMaskByCell[index] = 1
           }
 
-          if (area.maxScore <= 0 && area.kind !== 'road') {
+          if (area.maxScore <= 0) {
             noGoMaskByCell[index] = 1
           }
         }
 
-        if (area.maxScore < landScoreCapByCell[index]) {
+        if (area.kind !== 'road' && area.maxScore < landScoreCapByCell[index]) {
           landScoreCapByCell[index] = area.maxScore
         }
       }
@@ -1833,6 +1608,7 @@ const buildSpatialFactorField = (
     overlayExclusionMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas,
+    overlayExclusionLines,
     noGoOverlayAreas,
     averageCrimeDensity,
     noiseSegmentCount: noiseSegments.length,
@@ -1895,6 +1671,13 @@ const mixSuitabilityField = (
   const residentialEvidenceThreshold = Math.max(24, Math.floor(cellCount * 0.008))
   const hasResidentialEvidence =
     buildingEligibilityActive && residentialCandidateCellCount >= residentialEvidenceThreshold
+  const isEligibleCell = (index: number) =>
+    spatialField.landScoreCapByCell[index] > 0 &&
+    (Boolean(spatialField.overlayInclusionMaskByCell[index]) ||
+      (hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))) &&
+    (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
+    !spatialField.overlayExclusionMaskByCell[index] &&
+    !spatialField.noGoMaskByCell[index]
 
   for (let index = 0; index < cellCount; index += 1) {
     let score = 0.5
@@ -1913,13 +1696,7 @@ const mixSuitabilityField = (
 
     rawScores[index] = cappedScore
 
-    if (
-      spatialField.landScoreCapByCell[index] > 0 &&
-      Boolean(spatialField.overlayInclusionMaskByCell[index]) &&
-      (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
-      !spatialField.overlayExclusionMaskByCell[index] &&
-      !spatialField.noGoMaskByCell[index]
-    ) {
+    if (isEligibleCell(index)) {
       habitableRawScores.push(cappedScore)
       habitableCellCount += 1
     }
@@ -1930,12 +1707,7 @@ const mixSuitabilityField = (
   const scoreRange = maxHabitableScore - minHabitableScore
 
   for (let index = 0; index < cellCount; index += 1) {
-    const isHabitable =
-      spatialField.landScoreCapByCell[index] > 0 &&
-      Boolean(spatialField.overlayInclusionMaskByCell[index]) &&
-      (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
-      !spatialField.overlayExclusionMaskByCell[index] &&
-      !spatialField.noGoMaskByCell[index]
+    const isHabitable = isEligibleCell(index)
     const normalizedScore =
       isHabitable && Number.isFinite(scoreRange) && scoreRange > 0.001
         ? clamp((rawScores[index] - minHabitableScore) / scoreRange)
@@ -1969,6 +1741,7 @@ const mixSuitabilityField = (
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
+    overlayExclusionLines: spatialField.overlayExclusionLines,
     noGoOverlayAreas: spatialField.noGoOverlayAreas,
     averageScore: scoreTotal / Math.max(1, habitableCellCount),
     evaluatedCellCount: habitableCellCount,
@@ -1979,13 +1752,54 @@ const mixSuitabilityField = (
   }
 }
 
+const vectorExclusionAtPoint = (
+  field: SuitabilityField,
+  point: LatLng,
+): 'area' | 'road' | 'water' | null => {
+  const bounds = fieldBounds(field)
+  const meters = latLngToMeters(point, bounds, field.metersPerDegreeLng)
+
+  for (const area of field.overlayExclusionAreas) {
+    if (area.length < 3) {
+      continue
+    }
+
+    const projectedArea = area.map((areaPoint) =>
+      latLngToMeters(areaPoint, bounds, field.metersPerDegreeLng),
+    )
+
+    if (pointInPolygon(meters.x, meters.y, projectedArea)) {
+      return 'area'
+    }
+  }
+
+  for (const line of field.overlayExclusionLines) {
+    const points = line.points.map((linePoint) =>
+      latLngToMeters(linePoint, bounds, field.metersPerDegreeLng),
+    )
+
+    for (let index = 1; index < points.length; index += 1) {
+      if (
+        pointToSegmentDistanceMeters(meters.x, meters.y, points[index - 1], points[index]) <=
+        line.bufferMeters
+      ) {
+        return line.kind
+      }
+    }
+  }
+
+  return null
+}
+
 const scoreAt = (field: SuitabilityField, point: LatLng) => {
   const meters = latLngToMeters(point, fieldBounds(field), field.metersPerDegreeLng)
   const column = clamp(Math.floor(meters.x / field.cellSizeMeters), 0, field.cols - 1)
   const row = clamp(Math.floor(meters.y / field.cellSizeMeters), 0, field.rows - 1)
   const index = row * field.cols + column
 
-  return isScorablePointCell(field, index) ? field.scores[index] : 0
+  return !vectorExclusionAtPoint(field, point) && isScorablePointCell(field, index)
+    ? field.scores[index]
+    : 0
 }
 
 const cellIndexAtPoint = (field: SuitabilityField, point: LatLng) => {
@@ -2026,7 +1840,7 @@ const isDrawableOverlayCell = (field: SuitabilityField, index: number) =>
   !field.noGoMaskByCell[index]
 
 const isScorablePointCell = (field: SuitabilityField, index: number) =>
-  isDrawableOverlayCell(field, index) && !field.roadMaskByCell[index]
+  isDrawableOverlayCell(field, index)
 
 const isSmoothingSourceCell = (field: SuitabilityField, index: number) =>
   isScorablePointCell(field, index)
@@ -2306,10 +2120,13 @@ const analyzePoint = (
   const hasOverlayInclusion = Boolean(field.overlayInclusionMaskByCell[cellIndex])
   const hasOverlayExclusion = Boolean(field.overlayExclusionMaskByCell[cellIndex])
   const hasResidentialEvidence = Boolean(field.residentialCandidateMaskByCell[cellIndex])
+  const vectorExclusion = vectorExclusionAtPoint(field, point)
   const isNoGo = Boolean(field.noGoMaskByCell[cellIndex])
-  const isWater = Boolean(field.waterMaskByCell[cellIndex])
-  const isRoad = Boolean(field.roadMaskByCell[cellIndex])
-  const isUnscorableLand = !hasOverlayInclusion || isWater || isRoad || isNoGo || hasOverlayExclusion
+  const isWater = Boolean(field.waterMaskByCell[cellIndex]) || vectorExclusion === 'water'
+  const isRoad = vectorExclusion === 'road'
+  const isAreaExcluded = vectorExclusion === 'area'
+  const isUnscorableLand =
+    !hasOverlayInclusion || isWater || isRoad || isNoGo || hasOverlayExclusion || isAreaExcluded
   const landFactorScore = isUnscorableLand
     ? 0
     : hasResidentialEvidence
@@ -2323,7 +2140,7 @@ const analyzePoint = (
       ? 'дорога'
       : isNoGo
         ? 'нежилая/no-go'
-        : hasOverlayExclusion
+        : hasOverlayExclusion || isAreaExcluded
           ? 'исключена'
           : hasResidentialEvidence
             ? 'жилой сигнал'
@@ -2575,6 +2392,7 @@ const SuitabilityCanvasOverlay = ({
       context.fillRect(0, 0, size.x, size.y)
       context.globalCompositeOperation = 'source-over'
       eraseOverlayExclusions()
+      eraseOverlayExclusionLines()
       drawNoGoOverlays()
     }
 
@@ -2617,6 +2435,48 @@ const SuitabilityCanvasOverlay = ({
 
         context.closePath()
         context.fill()
+      }
+
+      context.restore()
+    }
+
+    const metersToCanvasPixels = (point: LatLng, meters: number) => {
+      const current = map.latLngToContainerPoint([point.lat, point.lng])
+      const shifted = map.latLngToContainerPoint([point.lat + meters / METERS_PER_DEGREE_LAT, point.lng])
+
+      return Math.max(1, Math.abs(current.y - shifted.y))
+    }
+
+    const eraseOverlayExclusionLines = () => {
+      if (field.overlayExclusionLines.length === 0) {
+        return
+      }
+
+      context.save()
+      context.globalCompositeOperation = 'destination-out'
+      context.strokeStyle = 'rgba(0, 0, 0, 1)'
+      context.lineCap = 'round'
+      context.lineJoin = 'round'
+
+      for (const line of field.overlayExclusionLines) {
+        if (line.points.length < 2) {
+          continue
+        }
+
+        context.lineWidth = metersToCanvasPixels(line.points[0], line.bufferMeters * 2)
+        context.beginPath()
+
+        line.points.forEach((point, pointIndex) => {
+          const layerPoint = map.latLngToContainerPoint([point.lat, point.lng])
+
+          if (pointIndex === 0) {
+            context.moveTo(layerPoint.x, layerPoint.y)
+          } else {
+            context.lineTo(layerPoint.x, layerPoint.y)
+          }
+        })
+
+        context.stroke()
       }
 
       context.restore()

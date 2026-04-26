@@ -58,6 +58,7 @@ export type LandPenaltyArea = {
     | 'rail-yard'
     | 'airport'
     | 'industrial'
+    | 'open-space'
     | 'parking'
     | 'road'
     | 'commercial'
@@ -237,6 +238,7 @@ export type SuitabilityField = {
   overlayExclusionMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
   overlayExclusionAreas: LatLng[][]
+  overlayExclusionLines: Array<{ points: LatLng[]; bufferMeters: number; kind: 'road' | 'water' }>
   noGoOverlayAreas: LatLng[][]
   averageScore: number
   evaluatedCellCount: number

@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 boston-housing-map-*.png
+.codex/
 
 # Editor directories and files
 .vscode/*
