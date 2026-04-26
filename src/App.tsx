@@ -11,7 +11,6 @@ import {
   ZoomControl,
 } from 'react-leaflet'
 import {
-  BarChart3,
   Building2,
   Download,
   Eye,
@@ -327,6 +326,7 @@ const BUILDING_MATCH_RADIUS_METERS = 90
 const BUILDING_STORE_LIMIT = 120_000
 const RESIDENTIAL_BUILDING_EVIDENCE_METERS = 95
 const LAND_EVIDENCE_BUFFER_METERS = 125
+const ROAD_SURFACE_NO_GO_BUFFER_METERS = 12
 const METERS_PER_DEGREE_LAT = 111_320
 const CRIME_RESOURCE_ID = 'b973d8cb-eeb2-4e7e-99da-c92938efc9c0'
 const MAX_CITY_LAT_SPAN = 0.12
@@ -1269,6 +1269,13 @@ const landPenaltyTemplateFromTags = (
     }
   }
 
+  if (tags.highway) {
+    return {
+      kind: 'land',
+      maxScore: 0,
+    }
+  }
+
   if (tags.landuse === 'commercial' || tags.landuse === 'retail') {
     return {
       kind: 'commercial',
@@ -1276,7 +1283,10 @@ const landPenaltyTemplateFromTags = (
     }
   }
 
-  if (['school', 'university', 'college', 'hospital'].includes(tags.amenity ?? '')) {
+  if (
+    ['school', 'university', 'college', 'hospital'].includes(tags.amenity ?? '') ||
+    ['education', 'institutional'].includes(tags.landuse ?? '')
+  ) {
     return {
       kind: 'civic',
       maxScore: 0,
@@ -1298,8 +1308,7 @@ const landPenaltyTemplateFromTags = (
   }
 
   if (
-    tags.highway ||
-    ['allotments', 'education', 'institutional', 'recreation_ground', 'village_green'].includes(tags.landuse ?? '') ||
+    ['allotments', 'recreation_ground', 'village_green'].includes(tags.landuse ?? '') ||
     ['island', 'islet'].includes(tags.place ?? '')
   ) {
     return {
@@ -1333,9 +1342,9 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
         name: tags.name ?? tags.highway ?? template.kind,
         kind: 'land',
         points: geometryPoints,
-        maxScore: 1,
+        maxScore: template.maxScore,
         isLinear: true,
-        bufferMeters: LAND_EVIDENCE_BUFFER_METERS,
+        bufferMeters: template.maxScore <= 0 ? ROAD_SURFACE_NO_GO_BUFFER_METERS : LAND_EVIDENCE_BUFFER_METERS,
       },
     ]
   }
@@ -2062,7 +2071,7 @@ const buildSpatialFactorField = (
       .map((park) => park.points ?? []),
   ]
   const noGoOverlayAreas = landPenaltyAreas
-    .filter((area) => area.kind !== 'water' && area.maxScore <= 0 && area.points.length >= 3)
+    .filter((area) => !area.isLinear && area.kind !== 'water' && area.maxScore <= 0 && area.points.length >= 3)
     .map((area) => area.points)
   const projectedParkAreas = poisByCategory.parks
     .filter((park) => park.points && park.points.length >= 3)
@@ -3097,7 +3106,7 @@ const SuitabilityCanvasOverlay = ({
 
       context.save()
       context.globalCompositeOperation = 'source-over'
-      context.fillStyle = `rgba(21, 24, 31, ${Math.min(0.42, opacity * 0.58)})`
+      context.fillStyle = `rgba(215, 25, 28, ${Math.min(0.68, opacity * 0.78)})`
 
       for (const area of field.noGoOverlayAreas) {
         if (area.length < 3) {
@@ -4270,29 +4279,6 @@ const App = () => {
         </div>
       </div>
 
-      <div className="metric-grid inspector-metrics">
-        <div className="metric-card">
-          <BarChart3 size={16} />
-          <span>Средний</span>
-          <strong>{hasEvaluatedCells ? Math.round(averageScore * 100) : 'н/д'}</strong>
-        </div>
-        <div className="metric-card">
-          <Target size={16} />
-          <span>Точка</span>
-          <strong>{Math.round(selectedAnalysis.score * 100)}</strong>
-        </div>
-        <div className="metric-card">
-          <ShieldAlert size={16} />
-          <span>Риск</span>
-          <strong>{Math.round(selectedAnalysis.riskScore * 100)}</strong>
-        </div>
-        <div className="metric-card">
-          <Sparkles size={16} />
-          <span>Доверие</span>
-          <strong>{Math.round(selectedAnalysis.confidence * 100)}</strong>
-        </div>
-      </div>
-
       <section className="panel-section analysis-card">
         <div className="analysis-head">
           <div>
@@ -4301,12 +4287,6 @@ const App = () => {
               {selectedAnalysis.point.lat.toFixed(5)}, {selectedAnalysis.point.lng.toFixed(5)}
             </strong>
           </div>
-          <span
-            className="score-pill large"
-            style={{ backgroundColor: colorForScore(selectedAnalysis.score) }}
-          >
-            {Math.round(selectedAnalysis.score * 100)}
-          </span>
         </div>
         <p className="thesis">{selectedAnalysis.thesis}</p>
         <PointCompletenessPanel
