@@ -83,6 +83,7 @@ type LandPenaltyArea = {
   name: string
   kind:
     | 'land'
+    | 'residential'
     | 'water'
     | 'rail-yard'
     | 'airport'
@@ -107,9 +108,29 @@ type TrafficSegment = {
 type BuildingFootprint = LatLng & {
   id: string
   name: string
+  use: 'residential' | 'nonResidential' | 'unknown'
   levels: number | null
   heightMeters: number | null
   points?: LatLng[]
+}
+
+type DataMode = 'live' | 'sample'
+type CrimeDataMode = 'live' | 'empty'
+type BuildingDataMode = 'live' | 'empty' | 'loading'
+
+type MainDataSnapshot = {
+  pois: Poi[]
+  crimeIncidents: CrimeIncident[]
+  noiseSegments: NoiseSegment[]
+  landPenaltyAreas: LandPenaltyArea[]
+  trafficSegments: TrafficSegment[]
+  dataMode: DataMode
+  crimeDataMode: CrimeDataMode
+}
+
+type BuildingDataSnapshot = {
+  buildingFootprints: BuildingFootprint[]
+  buildingDataMode: Exclude<BuildingDataMode, 'loading'>
 }
 
 type Criterion = {
@@ -216,6 +237,7 @@ type SuitabilityField = {
   noGoMaskByCell: Uint8Array
   overlayInclusionMaskByCell: Uint8Array
   overlayExclusionMaskByCell: Uint8Array
+  residentialCandidateMaskByCell: Uint8Array
   overlayExclusionAreas: LatLng[][]
   noGoOverlayAreas: LatLng[][]
   averageScore: number
@@ -252,8 +274,9 @@ const BOSTON_CENTER: LatLng = {
 const DEFAULT_CELL_SIZE_METERS = 100
 const RESOLUTION_OPTIONS = [50, 100, 150, 200, 300] as const
 const CRIME_RADIUS_METERS = 220
-const API_CACHE_VERSION = 'housing-score-v9'
+const API_CACHE_VERSION = 'housing-score-v11'
 const API_CACHE_TTL_MS = 1000 * 60 * 60 * 12
+const ZONE_SNAPSHOT_TTL_MS = 1000 * 60 * 10
 const PARK_SCORE_FLOOR = 0.55
 const MAJOR_ROAD_HARD_NOISE_METERS = 30
 const MAJOR_ROAD_SOFT_NOISE_METERS = 180
@@ -263,6 +286,7 @@ const AIRPORT_HARD_NOISE_METERS = 900
 const AIRPORT_SOFT_NOISE_METERS = 4200
 const TRAFFIC_MAX_AADT = 85_000
 const BUILDING_MATCH_RADIUS_METERS = 90
+const RESIDENTIAL_BUILDING_EVIDENCE_METERS = 95
 const LAND_EVIDENCE_BUFFER_METERS = 125
 const METERS_PER_DEGREE_LAT = 111_320
 const CRIME_RESOURCE_ID = 'b973d8cb-eeb2-4e7e-99da-c92938efc9c0'
@@ -656,7 +680,7 @@ const readApiCache = <T,>(key: string): T | null => {
   }
 }
 
-const writeApiCache = <T,>(key: string, value: T) => {
+const writeApiCache = <T,>(key: string, value: T, ttlMs = API_CACHE_TTL_MS) => {
   const normalizedKey = apiCacheKey(key)
 
   memoryApiCache.set(normalizedKey, value)
@@ -669,7 +693,7 @@ const writeApiCache = <T,>(key: string, value: T) => {
     window.localStorage.setItem(
       normalizedKey,
       JSON.stringify({
-        expiresAt: Date.now() + API_CACHE_TTL_MS,
+        expiresAt: Date.now() + ttlMs,
         value,
       }),
     )
@@ -678,8 +702,12 @@ const writeApiCache = <T,>(key: string, value: T) => {
   }
 }
 
-const cachedRequest = async <T,>(key: string, request: () => Promise<T>) => {
-  const cached = readApiCache<T>(key)
+const cachedRequest = async <T,>(
+  key: string,
+  request: () => Promise<T>,
+  options: { force?: boolean } = {},
+) => {
+  const cached = options.force ? null : readApiCache<T>(key)
 
   if (cached) {
     return cached
@@ -689,6 +717,15 @@ const cachedRequest = async <T,>(key: string, request: () => Promise<T>) => {
 
   writeApiCache(key, value)
   return value
+}
+
+const zoneSnapshotKey = (kind: 'main' | 'buildings', city: CityConfig) =>
+  `zone-snapshot:${kind}:${city.id}:${boundsCachePart(city.bounds)}`
+
+const readZoneSnapshot = <T,>(key: string) => readApiCache<T>(key)
+
+const writeZoneSnapshot = <T,>(key: string, value: T) => {
+  writeApiCache(key, value, ZONE_SNAPSHOT_TTL_MS)
 }
 
 const boundsToBbox = (bounds: MapBounds) =>
@@ -853,10 +890,8 @@ const buildBuildingLevelsQuery = (bounds: MapBounds) => {
   return `
 [out:json][timeout:35];
 (
-  way["building:levels"](${bbox});
-  relation["building:levels"](${bbox});
-  way["height"](${bbox});
-  relation["height"](${bbox});
+  way["building"](${bbox});
+  relation["building"](${bbox});
 );
 out center tags;`
 }
@@ -1072,7 +1107,7 @@ const landPenaltyTemplateFromTags = (
   if (tags.landuse === 'commercial' || tags.landuse === 'retail') {
     return {
       kind: 'commercial',
-      maxScore: 0.56,
+      maxScore: 0.42,
     }
   }
 
@@ -1090,11 +1125,16 @@ const landPenaltyTemplateFromTags = (
     }
   }
 
+  if (tags.landuse === 'residential') {
+    return {
+      kind: 'residential',
+      maxScore: 1,
+    }
+  }
+
   if (
     tags.highway ||
-    ['residential', 'allotments', 'education', 'institutional', 'recreation_ground', 'village_green'].includes(
-      tags.landuse ?? '',
-    ) ||
+    ['allotments', 'education', 'institutional', 'recreation_ground', 'village_green'].includes(tags.landuse ?? '') ||
     ['island', 'islet'].includes(tags.place ?? '')
   ) {
     return {
@@ -1161,6 +1201,68 @@ const parseNumericTag = (value: string | undefined) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
+const classifyBuildingUse = (tags: Record<string, string> = {}): BuildingFootprint['use'] => {
+  const building = tags.building
+  const residentialTypes = new Set([
+    'apartments',
+    'bungalow',
+    'cabin',
+    'detached',
+    'dormitory',
+    'duplex',
+    'farm',
+    'ger',
+    'house',
+    'houseboat',
+    'residential',
+    'semidetached_house',
+    'static_caravan',
+    'terrace',
+  ])
+  const nonResidentialTypes = new Set([
+    'commercial',
+    'construction',
+    'civic',
+    'college',
+    'garage',
+    'garages',
+    'greenhouse',
+    'hangar',
+    'hospital',
+    'hotel',
+    'industrial',
+    'kiosk',
+    'office',
+    'parking',
+    'public',
+    'retail',
+    'roof',
+    'school',
+    'service',
+    'shed',
+    'sports_hall',
+    'stadium',
+    'train_station',
+    'transportation',
+    'university',
+    'warehouse',
+  ])
+
+  if (building && residentialTypes.has(building)) {
+    return 'residential'
+  }
+
+  if (building && nonResidentialTypes.has(building)) {
+    return 'nonResidential'
+  }
+
+  if (tags['addr:unit'] || tags['addr:flats']) {
+    return 'residential'
+  }
+
+  return 'unknown'
+}
+
 const elementToBuildingFootprint = (element: OverpassElement): BuildingFootprint | null => {
   const lat = element.lat ?? element.center?.lat
   const lng = element.lon ?? element.center?.lon
@@ -1168,13 +1270,14 @@ const elementToBuildingFootprint = (element: OverpassElement): BuildingFootprint
   const heightMeters = parseNumericTag(element.tags?.height)
   const inferredLevels = levels ?? (heightMeters ? Math.max(1, Math.round(heightMeters / 3.1)) : null)
 
-  if (lat === undefined || lng === undefined || inferredLevels === null) {
+  if (lat === undefined || lng === undefined) {
     return null
   }
 
   return {
     id: `${element.type}-${element.id}`,
     name: element.tags?.name ?? 'Building',
+    use: classifyBuildingUse(element.tags),
     lat,
     lng,
     levels: inferredLevels,
@@ -1182,7 +1285,7 @@ const elementToBuildingFootprint = (element: OverpassElement): BuildingFootprint
   }
 }
 
-const fetchPois = async (signal: AbortSignal, bounds: MapBounds) => {
+const fetchPois = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `pois:${boundsCachePart(bounds)}`,
     async () => {
@@ -1201,6 +1304,7 @@ const fetchPois = async (signal: AbortSignal, bounds: MapBounds) => {
 
       return (await response.json()) as { elements?: OverpassElement[] }
     },
+    { force },
   )
   const seen = new Set<string>()
 
@@ -1219,7 +1323,7 @@ const fetchPois = async (signal: AbortSignal, bounds: MapBounds) => {
     })
 }
 
-const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds) => {
+const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `masks-noise:${boundsCachePart(bounds)}`,
     async () => {
@@ -1238,6 +1342,7 @@ const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds) => {
 
       return (await response.json()) as { elements?: OverpassElement[] }
     },
+    { force },
   )
 
   const elements = payload.elements ?? []
@@ -1250,7 +1355,7 @@ const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds) => {
   }
 }
 
-const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds) => {
+const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
     `building-levels:${boundsCachePart(bounds)}`,
     async () => {
@@ -1269,6 +1374,7 @@ const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds) =
 
       return (await response.json()) as { elements?: OverpassElement[] }
     },
+    { force },
   )
 
   return (payload.elements ?? [])
@@ -1277,7 +1383,7 @@ const fetchBuildingFootprints = async (signal: AbortSignal, bounds: MapBounds) =
     .slice(0, 75_000)
 }
 
-const fetchCrimeIncidents = async (signal: AbortSignal, bounds: MapBounds) => {
+const fetchCrimeIncidents = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const sql = `
 SELECT "_id", "INCIDENT_NUMBER", "OFFENSE_DESCRIPTION", "UCR_PART", "Lat", "Long"
 FROM "${CRIME_RESOURCE_ID}"
@@ -1295,20 +1401,24 @@ LIMIT 30000`
     result?: {
       records?: CrimeRecord[]
     }
-  }>(`crime:${boundsCachePart(bounds)}`, async () => {
-    const response = await fetch(url, { signal })
+  }>(
+    `crime:${boundsCachePart(bounds)}`,
+    async () => {
+      const response = await fetch(url, { signal })
 
-    if (!response.ok) {
-      throw new Error(`Boston crime ${response.status}`)
-    }
-
-    return (await response.json()) as {
-      success?: boolean
-      result?: {
-        records?: CrimeRecord[]
+      if (!response.ok) {
+        throw new Error(`Boston crime ${response.status}`)
       }
-    }
-  })
+
+      return (await response.json()) as {
+        success?: boolean
+        result?: {
+          records?: CrimeRecord[]
+        }
+      }
+    },
+    { force },
+  )
 
   if (!payload.success) {
     throw new Error('crime dataset unavailable')
@@ -1341,7 +1451,7 @@ LIMIT 30000`
     .filter((incident): incident is CrimeIncident => Boolean(incident))
 }
 
-const fetchTrafficSegments = async (signal: AbortSignal, bounds: MapBounds) => {
+const fetchTrafficSegments = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
   const segments: TrafficSegment[] = []
   const pageSize = 2000
 
@@ -1369,18 +1479,22 @@ const fetchTrafficSegments = async (signal: AbortSignal, bounds: MapBounds) => {
     const payload = await cachedRequest<{
       features?: ArcGisPolylineFeature[]
       error?: unknown
-    }>(`traffic:${boundsCachePart(bounds)}:${offset}`, async () => {
-      const response = await fetch(url, { signal })
+    }>(
+      `traffic:${boundsCachePart(bounds)}:${offset}`,
+      async () => {
+        const response = await fetch(url, { signal })
 
-      if (!response.ok) {
-        throw new Error(`MassDOT traffic ${response.status}`)
-      }
+        if (!response.ok) {
+          throw new Error(`MassDOT traffic ${response.status}`)
+        }
 
-      return (await response.json()) as {
-        features?: ArcGisPolylineFeature[]
-        error?: unknown
-      }
-    })
+        return (await response.json()) as {
+          features?: ArcGisPolylineFeature[]
+          error?: unknown
+        }
+      },
+      { force },
+    )
 
     if (payload.error) {
       throw new Error('traffic dataset unavailable')
@@ -1632,6 +1746,7 @@ const buildSpatialFactorField = (
   const noGoMaskByCell = new Uint8Array(cellCount)
   const overlayInclusionMaskByCell = new Uint8Array(cellCount)
   const overlayExclusionMaskByCell = new Uint8Array(cellCount)
+  const residentialCandidateMaskByCell = new Uint8Array(cellCount)
   const factorScores = {
     parks: new Float32Array(cellCount),
     groceries: new Float32Array(cellCount),
@@ -1834,6 +1949,10 @@ const buildSpatialFactorField = (
         } else {
           overlayInclusionMaskByCell[index] = 1
 
+          if (area.kind === 'residential') {
+            residentialCandidateMaskByCell[index] = 1
+          }
+
           if (area.maxScore <= 0) {
             noGoMaskByCell[index] = 1
           }
@@ -1921,6 +2040,7 @@ const buildSpatialFactorField = (
     noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell,
+    residentialCandidateMaskByCell,
     overlayExclusionAreas,
     noGoOverlayAreas,
     averageCrimeDensity,
@@ -1933,15 +2053,55 @@ const buildSpatialFactorField = (
 const mixSuitabilityField = (
   criteria: Criterion[],
   spatialField: SpatialFactorField,
+  buildingFootprints: BuildingFootprint[],
 ): SuitabilityField => {
   const cellCount = spatialField.cols * spatialField.rows
   const rawScores = new Float32Array(cellCount)
   const scores = new Float32Array(cellCount)
+  const residentialCandidateMaskByCell = new Uint8Array(spatialField.residentialCandidateMaskByCell)
   const enabledCriteria = criteria.filter((criterion) => criterion.enabled && criterion.weight > 0)
   const totalWeight = enabledCriteria.reduce((total, criterion) => total + criterion.weight, 0)
   const habitableRawScores: number[] = []
   let scoreTotal = 0
   let habitableCellCount = 0
+  const bounds = fieldBounds(spatialField)
+
+  for (const building of buildingFootprints) {
+    if (building.use !== 'residential') {
+      continue
+    }
+
+    const point = latLngToMeters(building, bounds, spatialField.metersPerDegreeLng)
+    const radiusCells = Math.max(1, Math.ceil(RESIDENTIAL_BUILDING_EVIDENCE_METERS / spatialField.cellSizeMeters))
+    const centerColumn = Math.floor(point.x / spatialField.cellSizeMeters)
+    const centerRow = Math.floor(point.y / spatialField.cellSizeMeters)
+    const minColumn = Math.max(0, centerColumn - radiusCells)
+    const maxColumn = Math.min(spatialField.cols - 1, centerColumn + radiusCells)
+    const minRow = Math.max(0, centerRow - radiusCells)
+    const maxRow = Math.min(spatialField.rows - 1, centerRow + radiusCells)
+
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let column = minColumn; column <= maxColumn; column += 1) {
+        const x = column * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
+        const y = row * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
+
+        if (Math.hypot(x - point.x, y - point.y) <= RESIDENTIAL_BUILDING_EVIDENCE_METERS) {
+          residentialCandidateMaskByCell[row * spatialField.cols + column] = 1
+        }
+      }
+    }
+  }
+
+  let residentialCandidateCellCount = 0
+
+  for (let index = 0; index < cellCount; index += 1) {
+    if (residentialCandidateMaskByCell[index]) {
+      residentialCandidateCellCount += 1
+    }
+  }
+
+  const residentialEvidenceThreshold = Math.max(24, Math.floor(cellCount * 0.008))
+  const hasResidentialEvidence = residentialCandidateCellCount >= residentialEvidenceThreshold
 
   for (let index = 0; index < cellCount; index += 1) {
     let score = 0.5
@@ -1962,7 +2122,8 @@ const mixSuitabilityField = (
 
     if (
       spatialField.landScoreCapByCell[index] > 0 &&
-      spatialField.overlayInclusionMaskByCell[index] &&
+      Boolean(spatialField.overlayInclusionMaskByCell[index]) &&
+      (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
       !spatialField.overlayExclusionMaskByCell[index] &&
       !spatialField.noGoMaskByCell[index]
     ) {
@@ -1979,6 +2140,7 @@ const mixSuitabilityField = (
     const isHabitable =
       spatialField.landScoreCapByCell[index] > 0 &&
       Boolean(spatialField.overlayInclusionMaskByCell[index]) &&
+      (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
       !spatialField.overlayExclusionMaskByCell[index] &&
       !spatialField.noGoMaskByCell[index]
     const normalizedScore =
@@ -1986,7 +2148,11 @@ const mixSuitabilityField = (
         ? clamp((rawScores[index] - minHabitableScore) / scoreRange)
         : rawScores[index]
 
-    scores[index] = isHabitable ? normalizedScore : rawScores[index]
+    scores[index] = isHabitable
+      ? normalizedScore
+      : hasResidentialEvidence
+        ? Math.min(rawScores[index], 0.42)
+        : rawScores[index]
 
     if (isHabitable) {
       scoreTotal += scores[index]
@@ -2007,6 +2173,7 @@ const mixSuitabilityField = (
     noGoMaskByCell: spatialField.noGoMaskByCell,
     overlayInclusionMaskByCell: spatialField.overlayInclusionMaskByCell,
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
+    residentialCandidateMaskByCell,
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
     noGoOverlayAreas: spatialField.noGoOverlayAreas,
     averageScore: scoreTotal / Math.max(1, habitableCellCount),
@@ -2570,11 +2737,11 @@ const App = () => {
   const [landPenaltyAreas, setLandPenaltyAreas] = useState<LandPenaltyArea[]>([])
   const [trafficSegments, setTrafficSegments] = useState<TrafficSegment[]>([])
   const [buildingFootprints, setBuildingFootprints] = useState<BuildingFootprint[]>([])
-  const [buildingDataMode, setBuildingDataMode] = useState<'live' | 'empty' | 'loading'>('empty')
+  const [buildingDataMode, setBuildingDataMode] = useState<BuildingDataMode>('empty')
   const [desiredFloor, setDesiredFloor] = useState(8)
   const [isLoading, setIsLoading] = useState(true)
-  const [dataMode, setDataMode] = useState<'live' | 'sample'>('sample')
-  const [crimeDataMode, setCrimeDataMode] = useState<'live' | 'empty'>('empty')
+  const [dataMode, setDataMode] = useState<DataMode>('sample')
+  const [crimeDataMode, setCrimeDataMode] = useState<CrimeDataMode>('empty')
   const [error, setError] = useState<string | null>(null)
   const [showPois, setShowPois] = useState(false)
   const [showOverlay, setShowOverlay] = useState(true)
@@ -2587,6 +2754,7 @@ const App = () => {
   const [savedSites, setSavedSites] = useState<SavedSite[]>([])
   const [activeProfileId, setActiveProfileId] = useState('balanced')
   const [refreshToken, setRefreshToken] = useState(0)
+  const [forceRefreshZoneKey, setForceRefreshZoneKey] = useState<string | null>(null)
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
 
   const availableCities = useMemo(
@@ -2604,6 +2772,10 @@ const App = () => {
       CITY_OPTIONS[0],
     [availableCities, customCity, selectedCityId, selectedState],
   )
+  const activeZoneCacheKey = useMemo(
+    () => `${activeCity.id}:${boundsCachePart(activeCity.bounds)}`,
+    [activeCity],
+  )
   const suggestedCityNames = useMemo(() => {
     const cityNames = new Set([
       ...(MAJOR_CITIES_BY_STATE[selectedState] ?? []),
@@ -2615,15 +2787,42 @@ const App = () => {
 
   useEffect(() => {
     const controller = new AbortController()
+    const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
+    const mainSnapshotKey = zoneSnapshotKey('main', activeCity)
+
+    Promise.resolve().then(() => {
+      if (controller.signal.aborted) {
+        return
+      }
+
+      if (!forceRefresh) {
+        const snapshot = readZoneSnapshot<MainDataSnapshot>(mainSnapshotKey)
+
+        if (snapshot) {
+          setPois(snapshot.pois)
+          setCrimeIncidents(snapshot.crimeIncidents)
+          setNoiseSegments(snapshot.noiseSegments)
+          setLandPenaltyAreas(snapshot.landPenaltyAreas)
+          setTrafficSegments(snapshot.trafficSegments)
+          setDataMode(snapshot.dataMode)
+          setCrimeDataMode(snapshot.crimeDataMode)
+          setError(null)
+          setIsLoading(false)
+          return
+        }
+      }
+
+      setIsLoading(true)
+    })
 
     Promise.allSettled([
-      fetchPois(controller.signal, activeCity.bounds),
+      fetchPois(controller.signal, activeCity.bounds, forceRefresh),
       activeCity.id === 'ma-boston'
-        ? fetchCrimeIncidents(controller.signal, activeCity.bounds)
+        ? fetchCrimeIncidents(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
-      fetchNoiseSegments(controller.signal, activeCity.bounds),
+      fetchNoiseSegments(controller.signal, activeCity.bounds, forceRefresh),
       activeCity.state === 'MA'
-        ? fetchTrafficSegments(controller.signal, activeCity.bounds)
+        ? fetchTrafficSegments(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
     ])
       .then(([poiResult, crimeResult, noiseResult, trafficResult]) => {
@@ -2632,39 +2831,73 @@ const App = () => {
         }
 
         const errors: string[] = []
+        const nextPois =
+          poiResult.status === 'fulfilled' && poiResult.value.length > 0
+            ? poiResult.value
+            : activeCity.id === 'ma-boston'
+              ? FALLBACK_POIS
+              : []
+        const nextDataMode: DataMode =
+          poiResult.status === 'fulfilled' && poiResult.value.length > 0 ? 'live' : 'sample'
+        const nextCrimeIncidents = crimeResult.status === 'fulfilled' ? crimeResult.value : []
+        const nextCrimeDataMode: CrimeDataMode =
+          crimeResult.status === 'fulfilled' && crimeResult.value.length > 0 ? 'live' : 'empty'
+        const nextNoiseSegments =
+          noiseResult.status === 'fulfilled' ? noiseResult.value.segments : []
+        const nextLandPenaltyAreas =
+          noiseResult.status === 'fulfilled' ? noiseResult.value.areas : []
+        const nextTrafficSegments = trafficResult.status === 'fulfilled' ? trafficResult.value : []
 
         if (poiResult.status === 'fulfilled' && poiResult.value.length > 0) {
-          setPois(poiResult.value)
-          setDataMode('live')
+          setPois(nextPois)
+          setDataMode(nextDataMode)
         } else {
-          setPois(activeCity.id === 'ma-boston' ? FALLBACK_POIS : [])
-          setDataMode('sample')
+          setPois(nextPois)
+          setDataMode(nextDataMode)
           errors.push('OSM')
         }
 
         if (crimeResult.status === 'fulfilled') {
-          setCrimeIncidents(crimeResult.value)
-          setCrimeDataMode(crimeResult.value.length > 0 ? 'live' : 'empty')
+          setCrimeIncidents(nextCrimeIncidents)
+          setCrimeDataMode(nextCrimeDataMode)
         } else {
-          setCrimeIncidents([])
-          setCrimeDataMode('empty')
+          setCrimeIncidents(nextCrimeIncidents)
+          setCrimeDataMode(nextCrimeDataMode)
           errors.push('crime')
         }
 
         if (noiseResult.status === 'fulfilled') {
-          setNoiseSegments(noiseResult.value.segments)
-          setLandPenaltyAreas(noiseResult.value.areas)
+          setNoiseSegments(nextNoiseSegments)
+          setLandPenaltyAreas(nextLandPenaltyAreas)
         } else {
-          setNoiseSegments([])
-          setLandPenaltyAreas([])
+          setNoiseSegments(nextNoiseSegments)
+          setLandPenaltyAreas(nextLandPenaltyAreas)
           errors.push('noise')
         }
 
         if (trafficResult.status === 'fulfilled') {
-          setTrafficSegments(trafficResult.value)
+          setTrafficSegments(nextTrafficSegments)
         } else {
-          setTrafficSegments([])
+          setTrafficSegments(nextTrafficSegments)
           errors.push('traffic')
+        }
+
+        const hasFreshSource =
+          poiResult.status === 'fulfilled' ||
+          noiseResult.status === 'fulfilled' ||
+          (activeCity.id === 'ma-boston' && crimeResult.status === 'fulfilled') ||
+          (activeCity.state === 'MA' && trafficResult.status === 'fulfilled')
+
+        if (hasFreshSource) {
+          writeZoneSnapshot<MainDataSnapshot>(mainSnapshotKey, {
+            pois: nextPois,
+            crimeIncidents: nextCrimeIncidents,
+            noiseSegments: nextNoiseSegments,
+            landPenaltyAreas: nextLandPenaltyAreas,
+            trafficSegments: nextTrafficSegments,
+            dataMode: nextDataMode,
+            crimeDataMode: nextCrimeDataMode,
+          })
         }
 
         setError(errors.length > 0 ? `${errors.join(' + ')} data unavailable` : null)
@@ -2676,11 +2909,13 @@ const App = () => {
       })
 
     return () => controller.abort()
-  }, [activeCity, refreshToken])
+  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken])
 
   useEffect(() => {
     const controller = new AbortController()
     let isCurrent = true
+    const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
+    const buildingSnapshotKey = zoneSnapshotKey('buildings', activeCity)
 
     Promise.resolve()
       .then(() => {
@@ -2688,9 +2923,22 @@ const App = () => {
           return []
         }
 
-        setBuildingFootprints([])
-        setBuildingDataMode('loading')
-        return fetchBuildingFootprints(controller.signal, activeCity.bounds)
+        if (!forceRefresh) {
+          const snapshot = readZoneSnapshot<BuildingDataSnapshot>(buildingSnapshotKey)
+
+          if (snapshot) {
+            setBuildingFootprints(snapshot.buildingFootprints)
+            setBuildingDataMode(snapshot.buildingDataMode)
+          } else {
+            setBuildingFootprints([])
+            setBuildingDataMode('loading')
+          }
+        } else {
+          setBuildingFootprints([])
+          setBuildingDataMode('loading')
+        }
+
+        return fetchBuildingFootprints(controller.signal, activeCity.bounds, forceRefresh)
       })
       .then((buildings) => {
         if (controller.signal.aborted || !isCurrent) {
@@ -2699,27 +2947,41 @@ const App = () => {
 
         setBuildingFootprints(buildings)
         setBuildingDataMode(buildings.length > 0 ? 'live' : 'empty')
+        writeZoneSnapshot<BuildingDataSnapshot>(buildingSnapshotKey, {
+          buildingFootprints: buildings,
+          buildingDataMode: buildings.length > 0 ? 'live' : 'empty',
+        })
       })
       .catch(() => {
         if (controller.signal.aborted || !isCurrent) {
           return
         }
 
-        setBuildingFootprints([])
-        setBuildingDataMode('empty')
+        const snapshot = !forceRefresh
+          ? readZoneSnapshot<BuildingDataSnapshot>(buildingSnapshotKey)
+          : null
+
+        if (snapshot) {
+          setBuildingFootprints(snapshot.buildingFootprints)
+          setBuildingDataMode(snapshot.buildingDataMode)
+        } else {
+          setBuildingFootprints([])
+          setBuildingDataMode('empty')
+        }
       })
 
     return () => {
       isCurrent = false
       controller.abort()
     }
-  }, [activeCity.bounds, refreshToken])
+  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken])
 
   const refreshData = useCallback(() => {
     setIsLoading(true)
     setError(null)
+    setForceRefreshZoneKey(activeZoneCacheKey)
     setRefreshToken((token) => token + 1)
-  }, [])
+  }, [activeZoneCacheKey])
 
   const searchCity = useCallback(() => {
     setIsSearchingCity(true)
@@ -2778,8 +3040,8 @@ const App = () => {
   )
 
   const suitabilityField = useMemo(
-    () => mixSuitabilityField(criteria, spatialFactorField),
-    [criteria, spatialFactorField],
+    () => mixSuitabilityField(criteria, spatialFactorField, buildingFootprints),
+    [buildingFootprints, criteria, spatialFactorField],
   )
 
   const neighborhoodScores = useMemo(
