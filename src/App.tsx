@@ -34,267 +34,45 @@ import {
   TreePine,
   Volume2,
 } from 'lucide-react'
+import type {
+  ArcGisPolylineFeature,
+  BuildingDataMode,
+  BuildingDataSnapshot,
+  BuildingFetchResult,
+  BuildingFootprint,
+  CityConfig,
+  CrimeDataMode,
+  CrimeIncident,
+  CrimeRecord,
+  Criterion,
+  CriterionId,
+  DataMode,
+  EvaluationProfile,
+  FactorBreakdown,
+  LandPenaltyArea,
+  LatLng,
+  LayerMode,
+  LoadStage,
+  LoadStageId,
+  LoadStageStatus,
+  MainDataSnapshot,
+  MapBounds,
+  NoiseSegment,
+  NoiseSourceKind,
+  OverpassElement,
+  OverpassGeometryPoint,
+  Poi,
+  PoiCategory,
+  PointAnalysis,
+  PointDataItem,
+  ProjectedPoi,
+  SavedSite,
+  SpatialFactorField,
+  SuitabilityField,
+  TrafficSegment,
+} from './domain/types'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
-
-type LatLng = {
-  lat: number
-  lng: number
-}
-
-type MapBounds = {
-  south: number
-  west: number
-  north: number
-  east: number
-}
-
-type CityConfig = {
-  id: string
-  state: string
-  city: string
-  bounds: MapBounds
-  center: LatLng
-  checkpoints: Array<LatLng & { name: string }>
-}
-
-type PoiCategory = 'parks' | 'groceries' | 'noise' | 'transit'
-type CriterionId = PoiCategory | 'center' | 'crime'
-
-type Poi = LatLng & {
-  id: string
-  name: string
-  category: PoiCategory
-  shopKind?: string
-  areaSqm?: number
-  parkStrength?: number
-  points?: LatLng[]
-}
-
-type CrimeIncident = LatLng & {
-  id: string
-  description: string
-  category: string
-}
-
-type NoiseSourceKind = 'road' | 'rail' | 'airport'
-
-type NoiseSegment = {
-  id: string
-  name: string
-  kind: NoiseSourceKind
-  roadClass?: string
-  points: LatLng[]
-}
-
-type LandPenaltyArea = {
-  id: string
-  name: string
-  kind:
-    | 'land'
-    | 'residential'
-    | 'water'
-    | 'rail-yard'
-    | 'airport'
-    | 'industrial'
-    | 'parking'
-    | 'commercial'
-    | 'civic'
-    | 'cemetery'
-  points: LatLng[]
-  maxScore: number
-  isLinear?: boolean
-  bufferMeters?: number
-}
-
-type TrafficSegment = {
-  id: string
-  aadt: number
-  year?: number
-  points: LatLng[]
-}
-
-type BuildingFootprint = LatLng & {
-  id: string
-  name: string
-  use: 'residential' | 'nonResidential' | 'unknown'
-  levels: number | null
-  heightMeters: number | null
-  points?: LatLng[]
-}
-
-type DataMode = 'live' | 'sample'
-type CrimeDataMode = 'live' | 'empty'
-type BuildingDataMode = 'live' | 'empty' | 'loading' | 'partial'
-
-type LoadStageId = 'osm' | 'crime' | 'noise' | 'traffic' | 'buildings'
-type LoadStageStatus = 'idle' | 'loading' | 'cached' | 'live' | 'empty' | 'partial' | 'error'
-
-type LoadStage = {
-  label: string
-  status: LoadStageStatus
-  count?: number
-  detail?: string
-}
-
-type MainDataSnapshot = {
-  pois: Poi[]
-  crimeIncidents: CrimeIncident[]
-  noiseSegments: NoiseSegment[]
-  landPenaltyAreas: LandPenaltyArea[]
-  trafficSegments: TrafficSegment[]
-  dataMode: DataMode
-  crimeDataMode: CrimeDataMode
-}
-
-type BuildingDataSnapshot = {
-  buildingFootprints: BuildingFootprint[]
-  buildingDataMode: Exclude<BuildingDataMode, 'loading'>
-  buildingTotalCount: number
-  buildingIsCapped: boolean
-}
-
-type BuildingFetchResult = {
-  buildings: BuildingFootprint[]
-  total: number
-  isCapped: boolean
-}
-
-type Criterion = {
-  id: CriterionId
-  label: string
-  enabled: boolean
-  weight: number
-  thresholdKm: number
-  mode: 'nearIsGood' | 'farIsGood' | 'belowAverageIsGood'
-}
-
-type EvaluationProfile = {
-  id: string
-  label: string
-  weights: Partial<Record<CriterionId, number>>
-}
-
-type FactorBreakdown = {
-  id: CriterionId | 'land'
-  label: string
-  score: number
-  detail: string
-  summary?: string
-}
-
-type PointDataItem = {
-  label: string
-  value: string
-  tone: 'good' | 'warn' | 'bad' | 'neutral'
-}
-
-type PointAnalysis = {
-  point: LatLng
-  score: number
-  label: string
-  factors: FactorBreakdown[]
-  dataCompleteness: PointDataItem[]
-  bestFactor: FactorBreakdown
-  worstFactor: FactorBreakdown
-  riskScore: number
-  opportunityScore: number
-  confidence: number
-  thesis: string
-}
-
-type SavedSite = PointAnalysis & {
-  id: string
-  name: string
-}
-
-type LayerMode = 'suitability' | 'risk' | 'opportunity'
-
-type OverpassGeometryPoint = {
-  lat: number
-  lon: number
-}
-
-type OverpassMember = {
-  type: string
-  ref: number
-  role?: string
-  geometry?: OverpassGeometryPoint[]
-}
-
-type OverpassElement = {
-  id: number
-  type: string
-  lat?: number
-  lon?: number
-  center?: {
-    lat: number
-    lon: number
-  }
-  tags?: Record<string, string>
-  geometry?: OverpassGeometryPoint[]
-  members?: OverpassMember[]
-}
-
-type CrimeRecord = {
-  _id: number
-  INCIDENT_NUMBER?: string
-  OFFENSE_DESCRIPTION?: string
-  UCR_PART?: string
-  Lat?: string | number | null
-  Long?: string | number | null
-}
-
-type TrafficRecord = {
-  OBJECTID: number
-  AADT?: number | null
-  AADT_Year?: number | null
-}
-
-type ArcGisPolylineFeature = {
-  attributes?: TrafficRecord
-  geometry?: {
-    paths?: number[][][]
-  }
-}
-
-type SuitabilityField = {
-  cellSizeMeters: number
-  cols: number
-  rows: number
-  west: number
-  north: number
-  east: number
-  south: number
-  metersPerDegreeLng: number
-  scores: Float32Array
-  waterMaskByCell: Uint8Array
-  noGoMaskByCell: Uint8Array
-  overlayInclusionMaskByCell: Uint8Array
-  overlayExclusionMaskByCell: Uint8Array
-  residentialCandidateMaskByCell: Uint8Array
-  overlayExclusionAreas: LatLng[][]
-  noGoOverlayAreas: LatLng[][]
-  averageScore: number
-  evaluatedCellCount: number
-  averageCrimeDensity: number
-  noiseSegmentCount: number
-  trafficSegmentCount: number
-  landPenaltyAreaCount: number
-}
-
-type SpatialFactorField = Omit<SuitabilityField, 'averageScore' | 'evaluatedCellCount' | 'scores'> & {
-  factorScores: Record<CriterionId, Float32Array>
-  landScoreCapByCell: Float32Array
-}
-
-type ProjectedPoi = {
-  x: number
-  y: number
-  shopKind?: string
-  areaSqm: number
-  parkStrength: number
-}
 
 const BOSTON_BOUNDS = {
   south: 42.2279,
@@ -311,7 +89,7 @@ const BOSTON_CENTER: LatLng = {
 const DEFAULT_CELL_SIZE_METERS = 100
 const RESOLUTION_OPTIONS = [50, 100, 150, 200, 300] as const
 const CRIME_RADIUS_METERS = 220
-const API_CACHE_VERSION = 'housing-score-v13'
+const API_CACHE_VERSION = 'housing-score-v14'
 const API_CACHE_TTL_MS = 1000 * 60 * 60 * 12
 const ZONE_SNAPSHOT_TTL_MS = 1000 * 60 * 10
 const PARK_SCORE_FLOOR = 0.55
@@ -1349,7 +1127,7 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
       {
         id: `${element.type}-${element.id}-road-surface`,
         name: tags.name ?? tags.highway ?? 'road',
-        kind: 'land',
+        kind: 'road',
         points: geometryPoints,
         maxScore: 0,
         isLinear: true,
@@ -2042,6 +1820,7 @@ const buildSpatialFactorField = (
   const transportNoiseByCell = new Float32Array(cellCount)
   const landScoreCapByCell = new Float32Array(cellCount)
   const waterMaskByCell = new Uint8Array(cellCount)
+  const roadMaskByCell = new Uint8Array(cellCount)
   const noGoMaskByCell = new Uint8Array(cellCount)
   const overlayInclusionMaskByCell = new Uint8Array(cellCount)
   const overlayExclusionMaskByCell = new Uint8Array(cellCount)
@@ -2080,7 +1859,7 @@ const buildSpatialFactorField = (
       .map((park) => park.points ?? []),
   ]
   const noGoOverlayAreas = landPenaltyAreas
-    .filter((area) => !area.isLinear && area.kind !== 'water' && area.maxScore <= 0 && area.points.length >= 3)
+    .filter((area) => !area.isLinear && !['water', 'road'].includes(area.kind) && area.maxScore <= 0 && area.points.length >= 3)
     .map((area) => area.points)
   const projectedParkAreas = poisByCategory.parks
     .filter((park) => park.points && park.points.length >= 3)
@@ -2248,11 +2027,15 @@ const buildSpatialFactorField = (
         } else {
           overlayInclusionMaskByCell[index] = 1
 
+          if (area.kind === 'road') {
+            roadMaskByCell[index] = 1
+          }
+
           if (area.kind === 'residential') {
             residentialCandidateMaskByCell[index] = 1
           }
 
-          if (area.maxScore <= 0) {
+          if (area.maxScore <= 0 && area.kind !== 'road') {
             noGoMaskByCell[index] = 1
           }
         }
@@ -2339,6 +2122,7 @@ const buildSpatialFactorField = (
     factorScores,
     landScoreCapByCell,
     waterMaskByCell,
+    roadMaskByCell,
     noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell,
@@ -2474,6 +2258,7 @@ const mixSuitabilityField = (
     metersPerDegreeLng: spatialField.metersPerDegreeLng,
     scores,
     waterMaskByCell: spatialField.waterMaskByCell,
+    roadMaskByCell: spatialField.roadMaskByCell,
     noGoMaskByCell: spatialField.noGoMaskByCell,
     overlayInclusionMaskByCell: spatialField.overlayInclusionMaskByCell,
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
@@ -2534,6 +2319,9 @@ const isDrawableOverlayCell = (field: SuitabilityField, index: number) =>
   !field.overlayExclusionMaskByCell[index] &&
   !field.noGoMaskByCell[index]
 
+const isSmoothingSourceCell = (field: SuitabilityField, index: number) =>
+  isDrawableOverlayCell(field, index) && !field.roadMaskByCell[index]
+
 const smoothedCellScore = (field: SuitabilityField, row: number, column: number) => {
   const sourceIndex = row * field.cols + column
 
@@ -2560,7 +2348,7 @@ const smoothedCellScore = (field: SuitabilityField, row: number, column: number)
 
       const index = sourceRow * field.cols + sourceColumn
 
-      if (!isDrawableOverlayCell(field, index)) {
+      if (!isSmoothingSourceCell(field, index)) {
         continue
       }
 
@@ -2812,17 +2600,27 @@ const analyzePoint = (
   const hasResidentialEvidence = Boolean(field.residentialCandidateMaskByCell[cellIndex])
   const isNoGo = Boolean(field.noGoMaskByCell[cellIndex])
   const isWater = Boolean(field.waterMaskByCell[cellIndex])
+  const isRoad = Boolean(field.roadMaskByCell[cellIndex])
   const pointLandStatus = isWater
     ? 'вода'
-    : isNoGo
-      ? 'нежилая/no-go'
-      : hasOverlayExclusion
-        ? 'исключена'
-        : hasResidentialEvidence
-          ? 'жилой сигнал'
-          : hasOverlayInclusion
-            ? 'земля без жилого сигнала'
-            : 'нет land mask'
+    : isRoad
+      ? 'дорога'
+      : isNoGo
+        ? 'нежилая/no-go'
+        : hasOverlayExclusion
+          ? 'исключена'
+          : hasResidentialEvidence
+            ? 'жилой сигнал'
+            : hasOverlayInclusion
+              ? 'земля без жилого сигнала'
+              : 'нет land mask'
+  const landDetail = isRoad
+    ? 'дорога / не жилье'
+    : landCap === 0
+      ? 'вода/не жилье'
+      : landCap < 1
+        ? 'OSM cap: не жилая зона'
+        : 'OSM cap не найден'
   const factors: FactorBreakdown[] = [
     {
       id: 'parks',
@@ -2877,7 +2675,7 @@ const analyzePoint = (
       id: 'land',
       label: 'Земля',
       score: landFactorScore,
-      detail: landCap === 0 ? 'вода/не жилье' : landCap < 1 ? 'OSM cap: не жилая зона' : 'OSM cap не найден',
+      detail: landDetail,
       summary: pointLandStatus,
     },
   ]
@@ -2893,7 +2691,7 @@ const analyzePoint = (
     {
       label: 'Земля',
       value: pointLandStatus,
-      tone: isWater || isNoGo || hasOverlayExclusion ? 'bad' : hasResidentialEvidence ? 'good' : 'warn',
+      tone: isWater || isRoad || isNoGo || hasOverlayExclusion ? 'bad' : hasResidentialEvidence ? 'good' : 'warn',
     },
     {
       label: 'Жилой сигнал',
