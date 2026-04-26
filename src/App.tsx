@@ -174,6 +174,7 @@ type FactorBreakdown = {
   label: string
   score: number
   detail: string
+  summary?: string
 }
 
 type PointDataItem = {
@@ -2804,18 +2805,24 @@ const analyzePoint = (
       label: 'Магазины',
       score: groceryScore,
       detail: `${nearestGrocery.poi?.name ?? 'Магазин'} · ${formatMeters(nearestGrocery.distance)}, ${grocerySupply.nearbyCount} рядом`,
+      summary:
+        grocerySupply.nearbyCount >= 5
+          ? `${grocerySupply.nearbyCount} магазинов рядом`
+          : `${grocerySupply.nearbyCount} рядом · ${formatMeters(nearestGrocery.distance)}`,
     },
     {
       id: 'noise',
       label: 'Шум',
       score: noiseScore,
       detail: `транспорт ${formatMeters(nearestTransport)}, nightlife ${formatMeters(nearestNightlife.distance)}`,
+      summary: `транспорт ${formatMeters(nearestTransport)}`,
     },
     {
       id: 'transit',
       label: 'Транспорт',
       score: transitScore,
       detail: `${nearestTransit.poi?.name ?? 'Станция'} · ${formatMeters(nearestTransit.distance)}`,
+      summary: formatMeters(nearestTransit.distance),
     },
     {
       id: 'center',
@@ -2834,6 +2841,7 @@ const analyzePoint = (
       label: 'Земля',
       score: landFactorScore,
       detail: landCap === 0 ? 'вода/не жилье' : landCap < 1 ? 'OSM cap: не жилая зона' : 'OSM cap не найден',
+      summary: pointLandStatus,
     },
   ]
   const sortedFactors = [...factors].sort((a, b) => a.score - b.score)
@@ -2842,6 +2850,8 @@ const analyzePoint = (
   const riskScore = 1 - Math.min(noiseScore, crimeScore, landCap)
   const opportunityScore = clamp(score * 0.72 + transitScore * 0.14 + groceryScore * 0.14 - riskScore * 0.18)
   const confidence = clamp(dataCoverage * 0.72 + (landCap < 1 ? 0.08 : 0.16) + (crimeIncidents.length > 0 ? 0.12 : 0))
+  const landConfidence = isWater || isNoGo || hasOverlayExclusion ? 0 : hasResidentialEvidence ? 1 : hasOverlayInclusion ? 0.55 : 0.35
+  const adjustedConfidence = Math.min(confidence, clamp(0.42 + landConfidence * 0.58))
   const dataCompleteness: PointDataItem[] = [
     {
       label: 'Земля',
@@ -2894,7 +2904,7 @@ const analyzePoint = (
     worstFactor,
     riskScore,
     opportunityScore,
-    confidence,
+    confidence: adjustedConfidence,
     thesis,
   }
 }
@@ -3283,7 +3293,7 @@ const PointCompletenessPanel = ({
     .slice(0, 3)
     .map((item): PointDataItem => ({
       label: item.label,
-      value: 'detail' in item ? item.detail : item.value,
+      value: 'detail' in item ? item.summary ?? item.detail : item.value,
       tone:
         'tone' in item
           ? item.tone

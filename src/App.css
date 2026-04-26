@@ -449,7 +449,7 @@
 }
 
 .point-data-grid.compact {
-  min-width: 230px;
+  min-width: 255px;
   gap: 5px;
 }
 
@@ -478,8 +478,12 @@
   font-size: 11px;
   font-weight: 820;
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.point-data-grid.compact .point-data-row {
+  grid-template-columns: 82px minmax(0, 1fr);
 }
 
 .point-data-row.good strong {
