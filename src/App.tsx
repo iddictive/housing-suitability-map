@@ -187,6 +187,13 @@ type NominatimPlace = {
   boundingbox?: [string, string, string, string]
 }
 
+type ResidentialEvidenceField = {
+  overlayInclusionMaskByCell: Uint8Array
+  residentialCandidateMaskByCell: Uint8Array
+  hasResidentialEvidence: boolean
+  isProvisionalEligibility: boolean
+}
+
 const isCityLevelPlace = (place: NominatimPlace) => {
   const address = place.address ?? {}
   const hasLocality = Boolean(
@@ -1282,6 +1289,7 @@ const buildSpatialFactorField = (
   const noGoMaskByCell = new Uint8Array(cellCount)
   const overlayInclusionMaskByCell = new Uint8Array(cellCount)
   const overlayExclusionMaskByCell = new Uint8Array(cellCount)
+  const landProxySeedMaskByCell = new Uint8Array(cellCount)
   const residentialCandidateMaskByCell = new Uint8Array(cellCount)
   const factorScores = {
     parks: new Float32Array(cellCount),
@@ -1414,14 +1422,16 @@ const buildSpatialFactorField = (
         for (let column = minColumn; column <= maxColumn; column += 1) {
           const x = column * cellSizeMeters + cellSizeMeters / 2
           const y = row * cellSizeMeters + cellSizeMeters / 2
-          const score = transportNoiseScore(
-            pointToSegmentDistanceMeters(x, y, start, end),
-            segment.kind,
-          )
+          const distance = pointToSegmentDistanceMeters(x, y, start, end)
+          const score = transportNoiseScore(distance, segment.kind)
           const index = row * cols + column
 
           if (score < transportNoiseByCell[index]) {
             transportNoiseByCell[index] = score
+          }
+
+          if (segment.kind === 'road' && distance <= 90) {
+            landProxySeedMaskByCell[index] = 1
           }
         }
       }
@@ -1448,11 +1458,16 @@ const buildSpatialFactorField = (
         for (let column = minColumn; column <= maxColumn; column += 1) {
           const x = column * cellSizeMeters + cellSizeMeters / 2
           const y = row * cellSizeMeters + cellSizeMeters / 2
-          const score = trafficNoiseScore(pointToSegmentDistanceMeters(x, y, start, end), segment.aadt)
+          const distance = pointToSegmentDistanceMeters(x, y, start, end)
+          const score = trafficNoiseScore(distance, segment.aadt)
           const index = row * cols + column
 
           if (score < transportNoiseByCell[index]) {
             transportNoiseByCell[index] = score
+          }
+
+          if (distance <= 120) {
+            landProxySeedMaskByCell[index] = 1
           }
         }
       }
@@ -1506,10 +1521,12 @@ const buildSpatialFactorField = (
           overlayExclusionMaskByCell[index] = 1
         } else if (area.kind === 'road') {
           roadMaskByCell[index] = 1
+          landProxySeedMaskByCell[index] = 1
         } else if (area.kind === 'open-space') {
           overlayExclusionMaskByCell[index] = 1
         } else {
           overlayInclusionMaskByCell[index] = 1
+          landProxySeedMaskByCell[index] = 1
 
           if (area.kind === 'residential') {
             residentialCandidateMaskByCell[index] = 1
@@ -1606,6 +1623,7 @@ const buildSpatialFactorField = (
     noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell,
+    landProxySeedMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas,
     overlayExclusionLines,
@@ -1620,65 +1638,22 @@ const buildSpatialFactorField = (
 const mixSuitabilityField = (
   criteria: Criterion[],
   spatialField: SpatialFactorField,
-  buildingFootprints: BuildingFootprint[],
-  buildingEligibilityActive: boolean,
+  residentialEvidence: ResidentialEvidenceField,
 ): SuitabilityField => {
   const cellCount = spatialField.cols * spatialField.rows
   const rawScores = new Float32Array(cellCount)
   const scores = new Float32Array(cellCount)
-  const overlayInclusionMaskByCell = new Uint8Array(spatialField.overlayInclusionMaskByCell)
-  const residentialCandidateMaskByCell = new Uint8Array(spatialField.residentialCandidateMaskByCell)
+  const overlayInclusionMaskByCell = residentialEvidence.overlayInclusionMaskByCell
+  const residentialCandidateMaskByCell = residentialEvidence.residentialCandidateMaskByCell
   const enabledCriteria = criteria.filter((criterion) => criterion.enabled && criterion.weight > 0)
   const totalWeight = enabledCriteria.reduce((total, criterion) => total + criterion.weight, 0)
   const habitableRawScores: number[] = []
   let scoreTotal = 0
   let habitableCellCount = 0
-  const bounds = fieldBounds(spatialField)
-
-  for (const building of buildingFootprints) {
-    if (building.use === 'nonResidential') {
-      continue
-    }
-
-    const point = latLngToMeters(building, bounds, spatialField.metersPerDegreeLng)
-    const radiusCells = Math.max(1, Math.ceil(RESIDENTIAL_BUILDING_EVIDENCE_METERS / spatialField.cellSizeMeters))
-    const centerColumn = Math.floor(point.x / spatialField.cellSizeMeters)
-    const centerRow = Math.floor(point.y / spatialField.cellSizeMeters)
-    const minColumn = Math.max(0, centerColumn - radiusCells)
-    const maxColumn = Math.min(spatialField.cols - 1, centerColumn + radiusCells)
-    const minRow = Math.max(0, centerRow - radiusCells)
-    const maxRow = Math.min(spatialField.rows - 1, centerRow + radiusCells)
-
-    for (let row = minRow; row <= maxRow; row += 1) {
-      for (let column = minColumn; column <= maxColumn; column += 1) {
-        const x = column * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
-        const y = row * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
-
-        if (Math.hypot(x - point.x, y - point.y) <= RESIDENTIAL_BUILDING_EVIDENCE_METERS) {
-          const index = row * spatialField.cols + column
-
-          residentialCandidateMaskByCell[index] = 1
-          overlayInclusionMaskByCell[index] = 1
-        }
-      }
-    }
-  }
-
-  let residentialCandidateCellCount = 0
-
-  for (let index = 0; index < cellCount; index += 1) {
-    if (residentialCandidateMaskByCell[index]) {
-      residentialCandidateCellCount += 1
-    }
-  }
-
-  const residentialEvidenceThreshold = Math.max(24, Math.floor(cellCount * 0.008))
-  const hasResidentialEvidence =
-    buildingEligibilityActive && residentialCandidateCellCount >= residentialEvidenceThreshold
   const isEligibleCell = (index: number) =>
     spatialField.landScoreCapByCell[index] > 0 &&
     (Boolean(overlayInclusionMaskByCell[index]) ||
-      (hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))) &&
+      (residentialEvidence.hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))) &&
     !spatialField.overlayExclusionMaskByCell[index] &&
     !spatialField.noGoMaskByCell[index]
 
@@ -1718,7 +1693,7 @@ const mixSuitabilityField = (
 
     scores[index] = isHabitable
       ? normalizedScore
-      : hasResidentialEvidence
+      : residentialEvidence.hasResidentialEvidence
         ? Math.min(rawScores[index], 0.42)
         : rawScores[index]
 
@@ -1742,6 +1717,7 @@ const mixSuitabilityField = (
     noGoMaskByCell: spatialField.noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
+    landProxySeedMaskByCell: spatialField.landProxySeedMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
     overlayExclusionLines: spatialField.overlayExclusionLines,
@@ -1752,6 +1728,127 @@ const mixSuitabilityField = (
     noiseSegmentCount: spatialField.noiseSegmentCount,
     trafficSegmentCount: spatialField.trafficSegmentCount,
     landPenaltyAreaCount: spatialField.landPenaltyAreaCount,
+  }
+}
+
+const buildResidentialEvidenceField = (
+  spatialField: SpatialFactorField,
+  buildingFootprints: BuildingFootprint[],
+  buildingEligibilityActive: boolean,
+): ResidentialEvidenceField => {
+  const cellCount = spatialField.cols * spatialField.rows
+  const overlayInclusionMaskByCell = new Uint8Array(spatialField.overlayInclusionMaskByCell)
+  const residentialCandidateMaskByCell = new Uint8Array(spatialField.residentialCandidateMaskByCell)
+  const bounds = fieldBounds(spatialField)
+  let residentialCandidateCellCount = 0
+
+  for (const building of buildingFootprints) {
+    if (building.use === 'nonResidential') {
+      continue
+    }
+
+    const point = latLngToMeters(building, bounds, spatialField.metersPerDegreeLng)
+    const radiusCells = Math.max(
+      1,
+      Math.ceil(RESIDENTIAL_BUILDING_EVIDENCE_METERS / spatialField.cellSizeMeters),
+    )
+    const centerColumn = Math.floor(point.x / spatialField.cellSizeMeters)
+    const centerRow = Math.floor(point.y / spatialField.cellSizeMeters)
+    const minColumn = Math.max(0, centerColumn - radiusCells)
+    const maxColumn = Math.min(spatialField.cols - 1, centerColumn + radiusCells)
+    const minRow = Math.max(0, centerRow - radiusCells)
+    const maxRow = Math.min(spatialField.rows - 1, centerRow + radiusCells)
+
+    for (let row = minRow; row <= maxRow; row += 1) {
+      for (let column = minColumn; column <= maxColumn; column += 1) {
+        const x = column * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
+        const y = row * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
+
+        if (Math.hypot(x - point.x, y - point.y) <= RESIDENTIAL_BUILDING_EVIDENCE_METERS) {
+          const index = row * spatialField.cols + column
+
+          residentialCandidateMaskByCell[index] = 1
+          overlayInclusionMaskByCell[index] = 1
+        }
+      }
+    }
+  }
+
+  let includedCellCount = 0
+
+  for (let index = 0; index < cellCount; index += 1) {
+    if (residentialCandidateMaskByCell[index]) {
+      residentialCandidateCellCount += 1
+    }
+
+    if (overlayInclusionMaskByCell[index]) {
+      includedCellCount += 1
+    }
+  }
+
+  const isProvisionalEligibility = includedCellCount < Math.floor(cellCount * 0.72)
+
+  if (isProvisionalEligibility) {
+    const radiusCells = Math.max(1, Math.ceil(220 / spatialField.cellSizeMeters))
+
+    for (let index = 0; index < cellCount; index += 1) {
+      if (!spatialField.landProxySeedMaskByCell[index]) {
+        continue
+      }
+
+      const seedRow = Math.floor(index / spatialField.cols)
+      const seedColumn = index % spatialField.cols
+      const minRow = Math.max(0, seedRow - radiusCells)
+      const maxRow = Math.min(spatialField.rows - 1, seedRow + radiusCells)
+      const minColumn = Math.max(0, seedColumn - radiusCells)
+      const maxColumn = Math.min(spatialField.cols - 1, seedColumn + radiusCells)
+
+      for (let row = minRow; row <= maxRow; row += 1) {
+        for (let column = minColumn; column <= maxColumn; column += 1) {
+          const targetIndex = row * spatialField.cols + column
+
+          if (Math.hypot(row - seedRow, column - seedColumn) > radiusCells) {
+            continue
+          }
+
+          if (
+            spatialField.landScoreCapByCell[targetIndex] > 0 &&
+            !spatialField.overlayExclusionMaskByCell[targetIndex] &&
+            !spatialField.noGoMaskByCell[targetIndex]
+          ) {
+            overlayInclusionMaskByCell[targetIndex] = 1
+          }
+        }
+      }
+    }
+
+    for (let index = 0; index < cellCount; index += 1) {
+      if (
+        overlayInclusionMaskByCell[index] ||
+        !buildingEligibilityActive ||
+        !residentialCandidateMaskByCell[index]
+      ) {
+        continue
+      }
+
+      if (
+        spatialField.landScoreCapByCell[index] > 0 &&
+        !spatialField.overlayExclusionMaskByCell[index] &&
+        !spatialField.noGoMaskByCell[index]
+      ) {
+        overlayInclusionMaskByCell[index] = 1
+      }
+    }
+  }
+
+  const residentialEvidenceThreshold = Math.max(24, Math.floor(cellCount * 0.008))
+
+  return {
+    overlayInclusionMaskByCell,
+    residentialCandidateMaskByCell,
+    hasResidentialEvidence:
+      buildingEligibilityActive && residentialCandidateCellCount >= residentialEvidenceThreshold,
+    isProvisionalEligibility,
   }
 }
 
@@ -2282,11 +2379,13 @@ const analyzePoint = (
 
 const SuitabilityCanvasOverlay = ({
   field,
+  resolving,
   mode,
   opacity,
   visible,
 }: {
   field: SuitabilityField
+  resolving: boolean
   mode: LayerMode
   opacity: number
   visible: boolean
@@ -2355,12 +2454,20 @@ const SuitabilityCanvasOverlay = ({
     offscreenContext.putImageData(image, 0, 0)
 
     let frameId = 0
+    let pulseFrameId = 0
     let canvasWidth = 0
     let canvasHeight = 0
+    let isInteracting = false
+
+    const AREA_DETAIL_MIN_ZOOM = 12
+    const ROAD_DETAIL_MIN_ZOOM = 15
 
     const draw = () => {
       const size = map.getSize()
       const deviceScale = window.devicePixelRatio || 1
+      const zoom = map.getZoom()
+      const shouldDrawAreaDetail = !isInteracting && zoom >= AREA_DETAIL_MIN_ZOOM
+      const shouldDrawRoadDetail = !isInteracting && zoom >= ROAD_DETAIL_MIN_ZOOM
       const topLeft = map.containerPointToLayerPoint([0, 0])
       const northWest = map.latLngToLayerPoint([field.north, field.west])
       const southEast = map.latLngToLayerPoint([field.south, field.east])
@@ -2386,7 +2493,7 @@ const SuitabilityCanvasOverlay = ({
       context.clearRect(0, 0, size.x, size.y)
 
       context.imageSmoothingEnabled = true
-      context.imageSmoothingQuality = 'high'
+      context.imageSmoothingQuality = isInteracting ? 'low' : 'high'
       context.globalCompositeOperation = 'source-over'
       context.drawImage(offscreen, drawX, drawY, drawWidth, drawHeight)
 
@@ -2394,9 +2501,16 @@ const SuitabilityCanvasOverlay = ({
       context.fillStyle = 'rgba(255, 255, 255, 0.12)'
       context.fillRect(0, 0, size.x, size.y)
       context.globalCompositeOperation = 'source-over'
-      eraseOverlayExclusions()
-      eraseOverlayExclusionLines()
-      drawNoGoOverlays()
+
+      if (shouldDrawAreaDetail) {
+        eraseOverlayExclusions()
+        eraseOverlayExclusionLines('water')
+        drawNoGoOverlays()
+      }
+
+      if (shouldDrawRoadDetail) {
+        eraseOverlayExclusionLines('road')
+      }
     }
 
     const scheduleDraw = () => {
@@ -2408,6 +2522,20 @@ const SuitabilityCanvasOverlay = ({
         frameId = 0
         draw()
       })
+    }
+
+    const handleInteractionStart = () => {
+      if (isInteracting) {
+        return
+      }
+
+      isInteracting = true
+      scheduleDraw()
+    }
+
+    const handleInteractionEnd = () => {
+      isInteracting = false
+      scheduleDraw()
     }
 
     const eraseOverlayExclusions = () => {
@@ -2450,7 +2578,7 @@ const SuitabilityCanvasOverlay = ({
       return Math.max(1, Math.abs(current.y - shifted.y))
     }
 
-    const eraseOverlayExclusionLines = () => {
+    const eraseOverlayExclusionLines = (kind: 'road' | 'water') => {
       if (field.overlayExclusionLines.length === 0) {
         return
       }
@@ -2462,6 +2590,10 @@ const SuitabilityCanvasOverlay = ({
       context.lineJoin = 'round'
 
       for (const line of field.overlayExclusionLines) {
+        if (line.kind !== kind) {
+          continue
+        }
+
         if (line.points.length < 2) {
           continue
         }
@@ -2519,17 +2651,38 @@ const SuitabilityCanvasOverlay = ({
     }
 
     draw()
-    map.on('move zoom resize viewreset moveend zoomend', scheduleDraw)
+    map.on('movestart zoomstart', handleInteractionStart)
+    map.on('move zoom resize viewreset', scheduleDraw)
+    map.on('moveend zoomend', handleInteractionEnd)
+
+    const pulse = () => {
+      const loadingOpacity = resolving ? 0.88 + Math.sin(performance.now() / 520) * 0.07 : 1
+
+      canvas.style.opacity = visible ? String(loadingOpacity) : '0'
+      pulseFrameId = window.requestAnimationFrame(pulse)
+    }
+
+    if (resolving) {
+      pulse()
+    } else {
+      canvas.style.opacity = visible ? '1' : '0'
+    }
 
     return () => {
       if (frameId) {
         window.cancelAnimationFrame(frameId)
       }
 
-      map.off('move zoom resize viewreset moveend zoomend', scheduleDraw)
+      if (pulseFrameId) {
+        window.cancelAnimationFrame(pulseFrameId)
+      }
+
+      map.off('movestart zoomstart', handleInteractionStart)
+      map.off('move zoom resize viewreset', scheduleDraw)
+      map.off('moveend zoomend', handleInteractionEnd)
       canvas.remove()
     }
-  }, [field, map, mode, opacity, visible])
+  }, [field, map, mode, opacity, resolving, visible])
 
   return null
 }
@@ -2778,6 +2931,7 @@ const App = () => {
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
+  const deferredCriteria = useDeferredValue(criteria)
 
   const availableCities = useMemo(
     () => [
@@ -3262,19 +3416,28 @@ const App = () => {
   const buildingEligibilityActive = useMemo(
     () =>
       (buildingDataMode === 'live' || buildingDataMode === 'partial') &&
-      buildingFootprints.some((building) => building.use === 'residential'),
+      buildingFootprints.some((building) => building.use !== 'nonResidential'),
     [buildingDataMode, buildingFootprints],
+  )
+
+  const residentialEvidence = useMemo(
+    () =>
+      buildResidentialEvidenceField(
+        spatialFactorField,
+        buildingFootprints,
+        buildingEligibilityActive,
+      ),
+    [buildingEligibilityActive, buildingFootprints, spatialFactorField],
   )
 
   const suitabilityField = useMemo(
     () =>
       mixSuitabilityField(
-        criteria,
+        deferredCriteria,
         spatialFactorField,
-        buildingFootprints,
-        buildingEligibilityActive,
+        residentialEvidence,
       ),
-    [buildingEligibilityActive, buildingFootprints, criteria, spatialFactorField],
+    [deferredCriteria, residentialEvidence, spatialFactorField],
   )
 
   const neighborhoodScores = useMemo(
@@ -3382,6 +3545,12 @@ const App = () => {
 
     return 'Данные готовы'
   }, [loadStages])
+
+  const overlayIsResolving =
+    isLoading ||
+    loadProgress < 100 ||
+    residentialEvidence.isProvisionalEligibility ||
+    Object.values(loadStages).some((stage) => stage.status === 'loading')
 
   const selectedAnalysis = useMemo(
     () =>
@@ -4120,6 +4289,7 @@ const App = () => {
             field={suitabilityField}
             mode={layerMode}
             opacity={overlayOpacity}
+            resolving={overlayIsResolving}
             visible={showOverlay}
           />
 

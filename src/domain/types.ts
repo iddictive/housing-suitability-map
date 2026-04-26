@@ -236,6 +236,7 @@ export type SuitabilityField = {
   noGoMaskByCell: Uint8Array
   overlayInclusionMaskByCell: Uint8Array
   overlayExclusionMaskByCell: Uint8Array
+  landProxySeedMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
   overlayExclusionAreas: LatLng[][]
   overlayExclusionLines: Array<{ points: LatLng[]; bufferMeters: number; kind: 'road' | 'water' }>
