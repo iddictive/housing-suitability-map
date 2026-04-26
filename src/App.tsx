@@ -1626,6 +1626,7 @@ const mixSuitabilityField = (
   const cellCount = spatialField.cols * spatialField.rows
   const rawScores = new Float32Array(cellCount)
   const scores = new Float32Array(cellCount)
+  const overlayInclusionMaskByCell = new Uint8Array(spatialField.overlayInclusionMaskByCell)
   const residentialCandidateMaskByCell = new Uint8Array(spatialField.residentialCandidateMaskByCell)
   const enabledCriteria = criteria.filter((criterion) => criterion.enabled && criterion.weight > 0)
   const totalWeight = enabledCriteria.reduce((total, criterion) => total + criterion.weight, 0)
@@ -1635,7 +1636,7 @@ const mixSuitabilityField = (
   const bounds = fieldBounds(spatialField)
 
   for (const building of buildingFootprints) {
-    if (building.use !== 'residential') {
+    if (building.use === 'nonResidential') {
       continue
     }
 
@@ -1654,7 +1655,10 @@ const mixSuitabilityField = (
         const y = row * spatialField.cellSizeMeters + spatialField.cellSizeMeters / 2
 
         if (Math.hypot(x - point.x, y - point.y) <= RESIDENTIAL_BUILDING_EVIDENCE_METERS) {
-          residentialCandidateMaskByCell[row * spatialField.cols + column] = 1
+          const index = row * spatialField.cols + column
+
+          residentialCandidateMaskByCell[index] = 1
+          overlayInclusionMaskByCell[index] = 1
         }
       }
     }
@@ -1673,9 +1677,8 @@ const mixSuitabilityField = (
     buildingEligibilityActive && residentialCandidateCellCount >= residentialEvidenceThreshold
   const isEligibleCell = (index: number) =>
     spatialField.landScoreCapByCell[index] > 0 &&
-    (Boolean(spatialField.overlayInclusionMaskByCell[index]) ||
+    (Boolean(overlayInclusionMaskByCell[index]) ||
       (hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))) &&
-    (!hasResidentialEvidence || Boolean(residentialCandidateMaskByCell[index])) &&
     !spatialField.overlayExclusionMaskByCell[index] &&
     !spatialField.noGoMaskByCell[index]
 
@@ -1737,7 +1740,7 @@ const mixSuitabilityField = (
     waterMaskByCell: spatialField.waterMaskByCell,
     roadMaskByCell: spatialField.roadMaskByCell,
     noGoMaskByCell: spatialField.noGoMaskByCell,
-    overlayInclusionMaskByCell: spatialField.overlayInclusionMaskByCell,
+    overlayInclusionMaskByCell,
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
