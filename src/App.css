@@ -443,6 +443,57 @@
   white-space: nowrap;
 }
 
+.point-data-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.point-data-grid.compact {
+  min-width: 230px;
+  gap: 5px;
+}
+
+.point-data-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-radius: 7px;
+  background: #f4f3ef;
+  padding: 6px 7px;
+}
+
+.point-data-row span {
+  overflow: hidden;
+  color: #687181;
+  font-size: 11px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.point-data-row strong {
+  overflow: hidden;
+  color: #20242d;
+  font-size: 11px;
+  font-weight: 820;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.point-data-row.good strong {
+  color: #247d47;
+}
+
+.point-data-row.warn strong {
+  color: #a95b14;
+}
+
+.point-data-row.bad strong {
+  color: #b91c1c;
+}
+
 .factor-callouts span {
   overflow: hidden;
   border-radius: 7px;
@@ -773,10 +824,25 @@
 
 .poi-popup {
   display: grid;
-  gap: 4px;
+  gap: 8px;
+  min-width: 245px;
   color: #20242d;
   font-size: 12px;
   line-height: 1.25;
+}
+
+.popup-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.popup-head span {
+  color: #687181;
+  font-size: 11px;
+  font-weight: 820;
+  white-space: nowrap;
 }
 
 .poi-popup strong {

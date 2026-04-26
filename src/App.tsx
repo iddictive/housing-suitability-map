@@ -174,11 +174,18 @@ type FactorBreakdown = {
   detail: string
 }
 
+type PointDataItem = {
+  label: string
+  value: string
+  tone: 'good' | 'warn' | 'bad' | 'neutral'
+}
+
 type PointAnalysis = {
   point: LatLng
   score: number
   label: string
   factors: FactorBreakdown[]
+  dataCompleteness: PointDataItem[]
   bestFactor: FactorBreakdown
   worstFactor: FactorBreakdown
   riskScore: number
@@ -2308,6 +2315,14 @@ const scoreAt = (field: SuitabilityField, point: LatLng) => {
   return field.scores[row * field.cols + column]
 }
 
+const cellIndexAtPoint = (field: SuitabilityField, point: LatLng) => {
+  const meters = latLngToMeters(point, fieldBounds(field), field.metersPerDegreeLng)
+  const column = clamp(Math.floor(meters.x / field.cellSizeMeters), 0, field.cols - 1)
+  const row = clamp(Math.floor(meters.y / field.cellSizeMeters), 0, field.rows - 1)
+
+  return row * field.cols + column
+}
+
 const colorChannelsForScore = (score: number) => {
   const normalizedScore = clamp(score) * 100
 
@@ -2512,6 +2527,7 @@ const analyzePoint = (
 ): PointAnalysis => {
   const bounds = fieldBounds(field)
   const meters = latLngToMeters(point, bounds, field.metersPerDegreeLng)
+  const cellIndex = cellIndexAtPoint(field, point)
   const score = scoreAt(field, point)
   const criteriaById = Object.fromEntries(criteria.map((criterion) => [criterion.id, criterion])) as Record<
     CriterionId,
@@ -2546,6 +2562,22 @@ const analyzePoint = (
   const crimeScore = crimeScoreAtPoint(point, crimeIncidents, field.averageCrimeDensity, bounds, field.metersPerDegreeLng)
   const landCap = landCapAtPoint(meters.x, meters.y, landPenaltyAreas, bounds, field.metersPerDegreeLng)
   const landFactorScore = landCap < 1 ? landCap : 0.86
+  const hasOverlayInclusion = Boolean(field.overlayInclusionMaskByCell[cellIndex])
+  const hasOverlayExclusion = Boolean(field.overlayExclusionMaskByCell[cellIndex])
+  const hasResidentialEvidence = Boolean(field.residentialCandidateMaskByCell[cellIndex])
+  const isNoGo = Boolean(field.noGoMaskByCell[cellIndex])
+  const isWater = Boolean(field.waterMaskByCell[cellIndex])
+  const pointLandStatus = isWater
+    ? 'вода'
+    : isNoGo
+      ? 'нежилая/no-go'
+      : hasOverlayExclusion
+        ? 'исключена'
+        : hasResidentialEvidence
+          ? 'жилой сигнал'
+          : hasOverlayInclusion
+            ? 'земля без жилого сигнала'
+            : 'нет land mask'
   const factors: FactorBreakdown[] = [
     {
       id: 'parks',
@@ -2596,6 +2628,41 @@ const analyzePoint = (
   const riskScore = 1 - Math.min(noiseScore, crimeScore, landCap)
   const opportunityScore = clamp(score * 0.72 + transitScore * 0.14 + groceryScore * 0.14 - riskScore * 0.18)
   const confidence = clamp(dataCoverage * 0.72 + (landCap < 1 ? 0.08 : 0.16) + (crimeIncidents.length > 0 ? 0.12 : 0))
+  const dataCompleteness: PointDataItem[] = [
+    {
+      label: 'Земля',
+      value: pointLandStatus,
+      tone: isWater || isNoGo || hasOverlayExclusion ? 'bad' : hasResidentialEvidence ? 'good' : 'warn',
+    },
+    {
+      label: 'Жилой сигнал',
+      value: hasResidentialEvidence ? 'есть' : 'не найден',
+      tone: hasResidentialEvidence ? 'good' : 'warn',
+    },
+    {
+      label: 'Криминал',
+      value: crimeIncidents.length > 0 ? `радиус ${CRIME_RADIUS_METERS} м` : 'нет live данных',
+      tone: crimeIncidents.length > 0 ? 'good' : 'bad',
+    },
+    {
+      label: 'Шум',
+      value:
+        noiseSegments.length > 0 || poisByCategory.noise.length > 0
+          ? `транспорт ${formatMeters(nearestTransport)}`
+          : 'нет источников',
+      tone: noiseSegments.length > 0 || poisByCategory.noise.length > 0 ? 'good' : 'warn',
+    },
+    {
+      label: 'Удобства',
+      value: `${poisByCategory.parks.length}/${poisByCategory.groceries.length}/${poisByCategory.transit.length}`,
+      tone:
+        poisByCategory.parks.length > 0 &&
+        poisByCategory.groceries.length > 0 &&
+        poisByCategory.transit.length > 0
+          ? 'good'
+          : 'warn',
+    },
+  ]
   const thesis =
     score >= 0.62 && riskScore < 0.45
       ? 'Кандидат для shortlist: сильная пригодность без критического риска.'
@@ -2608,6 +2675,7 @@ const analyzePoint = (
     score,
     label: labelForScore(score),
     factors,
+    dataCompleteness,
     bestFactor,
     worstFactor,
     riskScore,
@@ -2955,6 +3023,54 @@ const MapViewportSync = ({ bounds }: { bounds: MapBounds }) => {
   }, [bounds, map])
 
   return null
+}
+
+const PointCompletenessPanel = ({
+  analysis,
+  building,
+  buildingDistance,
+  buildingDataMode,
+  compact = false,
+}: {
+  analysis: PointAnalysis
+  building: BuildingFootprint | null
+  buildingDistance: number
+  buildingDataMode: BuildingDataMode
+  compact?: boolean
+}) => {
+  const buildingItem: PointDataItem = {
+    label: 'Здание',
+    value:
+      buildingDataMode === 'loading'
+        ? 'загрузка'
+        : building
+          ? `${building.levels ?? '?'} эт. · ${formatMeters(buildingDistance)}`
+          : buildingDataMode === 'partial'
+            ? 'не найдено в partial'
+            : 'не найдено',
+    tone:
+      buildingDataMode === 'loading'
+        ? 'neutral'
+        : building
+          ? 'good'
+          : buildingDataMode === 'partial'
+            ? 'warn'
+            : 'bad',
+  }
+  const items = compact
+    ? [analysis.dataCompleteness[0], analysis.dataCompleteness[1], analysis.dataCompleteness[2], buildingItem]
+    : [...analysis.dataCompleteness, buildingItem]
+
+  return (
+    <div className={compact ? 'point-data-grid compact' : 'point-data-grid'}>
+      {items.map((item) => (
+        <div className={`point-data-row ${item.tone}`} key={`${item.label}-${item.value}`}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 const App = () => {
@@ -4024,6 +4140,12 @@ const App = () => {
               </strong>
             </div>
           </div>
+          <PointCompletenessPanel
+            analysis={selectedAnalysis}
+            building={selectedBuilding.building}
+            buildingDataMode={buildingDataMode}
+            buildingDistance={selectedBuilding.distance}
+          />
           <div className="factor-callouts">
             <span>Сила: {selectedAnalysis.bestFactor.label}</span>
             <span>Риск: {selectedAnalysis.worstFactor.label}</span>
@@ -4279,8 +4401,18 @@ const App = () => {
           >
             <Popup>
               <div className="poi-popup">
-                <strong>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</strong>
+                <div className="popup-head">
+                  <strong>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</strong>
+                  <span>{Math.round(selectedAnalysis.confidence * 100)}% trust</span>
+                </div>
                 <span>{selectedAnalysis.worstFactor.label}: {selectedAnalysis.worstFactor.detail}</span>
+                <PointCompletenessPanel
+                  analysis={selectedAnalysis}
+                  building={selectedBuilding.building}
+                  buildingDataMode={buildingDataMode}
+                  buildingDistance={selectedBuilding.distance}
+                  compact
+                />
               </div>
             </Popup>
           </CircleMarker>
