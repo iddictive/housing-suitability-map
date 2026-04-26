@@ -311,7 +311,7 @@ const BOSTON_CENTER: LatLng = {
 const DEFAULT_CELL_SIZE_METERS = 100
 const RESOLUTION_OPTIONS = [50, 100, 150, 200, 300] as const
 const CRIME_RADIUS_METERS = 220
-const API_CACHE_VERSION = 'housing-score-v12'
+const API_CACHE_VERSION = 'housing-score-v13'
 const API_CACHE_TTL_MS = 1000 * 60 * 60 * 12
 const ZONE_SNAPSHOT_TTL_MS = 1000 * 60 * 10
 const PARK_SCORE_FLOOR = 0.55
@@ -1272,7 +1272,7 @@ const landPenaltyTemplateFromTags = (
   if (tags.highway) {
     return {
       kind: 'land',
-      maxScore: 0,
+      maxScore: 1,
     }
   }
 
@@ -1344,7 +1344,16 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
         points: geometryPoints,
         maxScore: template.maxScore,
         isLinear: true,
-        bufferMeters: template.maxScore <= 0 ? ROAD_SURFACE_NO_GO_BUFFER_METERS : LAND_EVIDENCE_BUFFER_METERS,
+        bufferMeters: LAND_EVIDENCE_BUFFER_METERS,
+      },
+      {
+        id: `${element.type}-${element.id}-road-surface`,
+        name: tags.name ?? tags.highway ?? 'road',
+        kind: 'land',
+        points: geometryPoints,
+        maxScore: 0,
+        isLinear: true,
+        bufferMeters: ROAD_SURFACE_NO_GO_BUFFER_METERS,
       },
     ]
   }
