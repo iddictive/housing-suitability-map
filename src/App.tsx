@@ -3240,12 +3240,14 @@ const PointCompletenessPanel = ({
   building,
   buildingDistance,
   buildingDataMode,
+  city,
   compact = false,
 }: {
   analysis: PointAnalysis
   building: BuildingFootprint | null
   buildingDistance: number
   buildingDataMode: BuildingDataMode
+  city: CityConfig
   compact?: boolean
 }) => {
   const buildingItem: PointDataItem = {
@@ -3267,9 +3269,33 @@ const PointCompletenessPanel = ({
             ? 'warn'
             : 'bad',
   }
+  const landItem = analysis.dataCompleteness[0]
+  const crimeItem: PointDataItem =
+    city.id === 'ma-boston'
+      ? analysis.dataCompleteness[2]
+      : { label: 'Криминал', value: 'Boston only', tone: 'neutral' }
+  const compactItems = [
+    landItem,
+    analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
+    building ? buildingItem : null,
+  ]
+    .filter((item): item is PointDataItem | FactorBreakdown => Boolean(item))
+    .slice(0, 3)
+    .map((item): PointDataItem => ({
+      label: item.label,
+      value: 'detail' in item ? item.detail : item.value,
+      tone:
+        'tone' in item
+          ? item.tone
+          : item.score >= 0.62
+            ? 'good'
+            : item.score >= 0.38
+              ? 'warn'
+              : 'bad',
+    }))
   const items = compact
-    ? [analysis.dataCompleteness[0], analysis.dataCompleteness[1], analysis.dataCompleteness[2], buildingItem]
-    : [...analysis.dataCompleteness, buildingItem]
+    ? compactItems
+    : [landItem, crimeItem, ...analysis.dataCompleteness.slice(3), buildingItem]
 
   return (
     <div className={compact ? 'point-data-grid compact' : 'point-data-grid'}>
@@ -4414,6 +4440,7 @@ const App = () => {
             building={selectedBuilding.building}
             buildingDataMode={buildingDataMode}
             buildingDistance={selectedBuilding.distance}
+            city={activeCity}
           />
           <div className="factor-callouts">
             <span>Сила: {selectedAnalysis.bestFactor.label}</span>
@@ -4674,12 +4701,12 @@ const App = () => {
                   <strong>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</strong>
                   <span>{Math.round(selectedAnalysis.confidence * 100)}% trust</span>
                 </div>
-                <span>{selectedAnalysis.worstFactor.label}: {selectedAnalysis.worstFactor.detail}</span>
                 <PointCompletenessPanel
                   analysis={selectedAnalysis}
                   building={selectedBuilding.building}
                   buildingDataMode={buildingDataMode}
                   buildingDistance={selectedBuilding.distance}
+                  city={activeCity}
                   compact
                 />
               </div>
