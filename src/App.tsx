@@ -1,5 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import {
+  AttributionControl,
   CircleMarker,
   MapContainer,
   Popup,
@@ -18,9 +19,15 @@ import {
   Layers3,
   Loader2,
   MapPin,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   RefreshCcw,
+  Search,
   ShieldAlert,
   ShoppingBasket,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Target,
@@ -2276,7 +2283,8 @@ const buildSpatialFactorField = (
         criteriaById.noise,
       )
 
-      factorScores.crime[index] = clamp(1 - crimeDensity[index] / (baseline * 3.1))
+      factorScores.crime[index] =
+        crimeIncidents.length > 0 ? clamp(1 - crimeDensity[index] / (baseline * 3.1)) : 0.5
       factorScores.center[index] = scoreByDistance(
         Math.hypot(x - center.x, y - center.y) / 1000,
         criteriaById.center,
@@ -2588,7 +2596,7 @@ const loadStatusText = (stage: LoadStage) => {
     }
 
     if (stage.detail === 'Boston only') {
-      return stage.detail
+      return 'только Бостон'
     }
 
     return 'нет'
@@ -2704,6 +2712,10 @@ const crimeScoreAtPoint = (
   bounds = BOSTON_BOUNDS,
   metersPerDegreeLng = metersPerDegreeLngForBounds(bounds),
 ) => {
+  if (incidents.length === 0) {
+    return 0.5
+  }
+
   const center = latLngToMeters(point, bounds, metersPerDegreeLng)
   let localWeightedDensity = 0
 
@@ -2834,7 +2846,14 @@ const analyzePoint = (
       id: 'crime',
       label: 'Криминал',
       score: crimeScore,
-      detail: crimeScore >= 0.65 ? 'ниже среднего фона' : crimeScore >= 0.4 ? 'около среднего' : 'выше среднего',
+      detail:
+        crimeIncidents.length === 0
+          ? 'нет live данных'
+          : crimeScore >= 0.65
+            ? 'ниже среднего фона'
+            : crimeScore >= 0.4
+              ? 'около среднего'
+              : 'выше среднего',
     },
     {
       id: 'land',
@@ -3078,7 +3097,7 @@ const SuitabilityCanvasOverlay = ({
 
       context.save()
       context.globalCompositeOperation = 'source-over'
-      context.fillStyle = `rgba(215, 25, 28, ${Math.min(0.86, opacity * 0.92)})`
+      context.fillStyle = `rgba(21, 24, 31, ${Math.min(0.42, opacity * 0.58)})`
 
       for (const area of field.noGoOverlayAreas) {
         if (area.length < 3) {
@@ -3283,7 +3302,7 @@ const PointCompletenessPanel = ({
   const crimeItem: PointDataItem =
     city.id === 'ma-boston'
       ? analysis.dataCompleteness[2]
-      : { label: 'Криминал', value: 'Boston only', tone: 'neutral' }
+      : { label: 'Криминал', value: 'только Бостон', tone: 'neutral' }
   const compactItems = [
     landItem,
     analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
@@ -3361,6 +3380,8 @@ const App = () => {
   const [isRegionSelectMode, setIsRegionSelectMode] = useState(false)
   const [draftRegionBounds, setDraftRegionBounds] = useState<MapBounds | null>(null)
   const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
+  const [isInspectorOpen, setIsInspectorOpen] = useState(true)
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
 
   const availableCities = useMemo(
@@ -3813,10 +3834,10 @@ const App = () => {
       ({
         parks: pois.filter((poi) => poi.category === 'parks'),
         groceries: pois.filter((poi) => poi.category === 'groceries'),
-        noise: pois.filter((poi) => poi.category === 'noise'),
+        noise: dataMode === 'live' ? pois.filter((poi) => poi.category === 'noise') : [],
         transit: pois.filter((poi) => poi.category === 'transit'),
       }) satisfies Record<PoiCategory, Poi[]>,
-    [pois],
+    [dataMode, pois],
   )
 
   const spatialFactorField = useMemo(
@@ -4106,30 +4127,272 @@ const App = () => {
     trafficSegments.length,
   ])
 
+  const mapTopBar = (
+    <div className="map-topbar" aria-label="Поиск и панели">
+      <button
+        className="icon-button"
+        type="button"
+        onClick={() => setIsLeftPanelOpen((current) => !current)}
+        aria-label={isLeftPanelOpen ? 'Скрыть фильтры' : 'Показать фильтры'}
+        title={isLeftPanelOpen ? 'Скрыть фильтры' : 'Показать фильтры'}
+      >
+        {isLeftPanelOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+      </button>
+      <div className="map-search">
+        <Search size={16} />
+        <select
+          aria-label="Штат"
+          value={selectedState}
+          onChange={(event) => {
+            const nextState = event.target.value
+
+            setSelectedState(nextState)
+            setSelectedRegionBounds(null)
+            setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
+          }}
+        >
+          {US_STATES.map((state) => (
+            <option key={state.code} value={state.code}>
+              {state.code}
+            </option>
+          ))}
+        </select>
+        <input
+          aria-label="Город или район"
+          list="major-city-options"
+          placeholder={activeCityLabel}
+          type="text"
+          value={citySearchText}
+          onChange={(event) => setCitySearchText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              searchCity()
+            }
+          }}
+        />
+        <datalist id="major-city-options">
+          {suggestedCityNames.map((city) => (
+            <option key={`${selectedState}-${city}`} value={city} />
+          ))}
+        </datalist>
+        <button
+          className="text-button"
+          disabled={isSearchingCity || citySearchText.trim().length === 0}
+          type="button"
+          onClick={searchCity}
+        >
+          {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
+          Найти
+        </button>
+        <input
+          aria-label="ZIP code"
+          inputMode="numeric"
+          placeholder="ZIP"
+          type="text"
+          value={zipSearchText}
+          onChange={(event) => setZipSearchText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              searchZip()
+            }
+          }}
+        />
+        <button
+          className="text-button"
+          disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
+          type="button"
+          onClick={searchZip}
+        >
+          {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
+          ZIP
+        </button>
+      </div>
+      <button
+        className={`text-button ${isRegionSelectMode ? 'active' : ''}`}
+        type="button"
+        onClick={() => {
+          setDraftRegionBounds(null)
+          setIsRegionSelectMode((current) => !current)
+        }}
+      >
+        <Target size={15} />
+        Регион
+      </button>
+      <button
+        className="icon-button"
+        type="button"
+        onClick={refreshData}
+        aria-label="Обновить данные"
+        title="Обновить данные"
+      >
+        {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
+      </button>
+      <button
+        className="icon-button"
+        type="button"
+        onClick={() => setIsInspectorOpen((current) => !current)}
+        aria-label={isInspectorOpen ? 'Скрыть инспектор' : 'Показать инспектор'}
+        title={isInspectorOpen ? 'Скрыть инспектор' : 'Показать инспектор'}
+      >
+        {isInspectorOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+      </button>
+    </div>
+  )
+
+  const pointInspector = (
+    <aside className="inspector-panel" aria-label="Инспектор точки">
+      <header className="inspector-header">
+        <div>
+          <p className="eyebrow">Точка</p>
+          <h2>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</h2>
+        </div>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={() => setIsInspectorOpen(false)}
+          aria-label="Скрыть инспектор"
+          title="Скрыть инспектор"
+        >
+          <PanelRightClose size={18} />
+        </button>
+      </header>
+
+      <div className="metric-grid inspector-metrics">
+        <div className="metric-card">
+          <BarChart3 size={16} />
+          <span>Средний</span>
+          <strong>{hasEvaluatedCells ? Math.round(averageScore * 100) : 'н/д'}</strong>
+        </div>
+        <div className="metric-card">
+          <Target size={16} />
+          <span>Точка</span>
+          <strong>{Math.round(selectedAnalysis.score * 100)}</strong>
+        </div>
+        <div className="metric-card">
+          <ShieldAlert size={16} />
+          <span>Риск</span>
+          <strong>{Math.round(selectedAnalysis.riskScore * 100)}</strong>
+        </div>
+        <div className="metric-card">
+          <Sparkles size={16} />
+          <span>Доверие</span>
+          <strong>{Math.round(selectedAnalysis.confidence * 100)}</strong>
+        </div>
+      </div>
+
+      <section className="panel-section analysis-card">
+        <div className="analysis-head">
+          <div>
+            <span className="mini-label">Координаты</span>
+            <strong>
+              {selectedAnalysis.point.lat.toFixed(5)}, {selectedAnalysis.point.lng.toFixed(5)}
+            </strong>
+          </div>
+          <span
+            className="score-pill large"
+            style={{ backgroundColor: colorForScore(selectedAnalysis.score) }}
+          >
+            {Math.round(selectedAnalysis.score * 100)}
+          </span>
+        </div>
+        <p className="thesis">{selectedAnalysis.thesis}</p>
+        <PointCompletenessPanel
+          analysis={selectedAnalysis}
+          building={selectedBuilding.building}
+          buildingDataMode={buildingDataMode}
+          buildingDistance={selectedBuilding.distance}
+          city={activeCity}
+        />
+        <div className="point-context">
+          <div>
+            <span>Плюс</span>
+            <strong>{selectedAnalysis.bestFactor.detail}</strong>
+          </div>
+          <div>
+            <span>Риск</span>
+            <strong>{selectedAnalysis.worstFactor.detail}</strong>
+          </div>
+          <div>
+            <span>Здание</span>
+            <strong>
+              {selectedBuilding.building
+                ? `${selectedBuilding.building.levels ?? '?'} эт. · ${formatMeters(selectedBuilding.distance)}`
+                : 'нет данных'}
+            </strong>
+          </div>
+        </div>
+        <div className="factor-list">
+          {selectedAnalysis.factors.map((factor) => (
+            <div className="factor-row" key={factor.id}>
+              <div className="factor-meta">
+                <span>{factor.label}</span>
+                <strong>{Math.round(factor.score * 100)}</strong>
+              </div>
+              <div className="factor-track">
+                <span
+                  className="factor-fill"
+                  style={{
+                    width: `${Math.round(factor.score * 100)}%`,
+                    backgroundColor: colorForScore(factor.score),
+                  }}
+                />
+              </div>
+              <small>{factor.detail}</small>
+            </div>
+          ))}
+        </div>
+        <div className="action-row">
+          <button
+            className="text-button"
+            disabled={isSelectedSitePinned}
+            type="button"
+            onClick={addSelectedSite}
+          >
+            <Star size={16} />
+            {isSelectedSitePinned ? 'Закреплено' : 'Закрепить'}
+          </button>
+          <button className="text-button" type="button" onClick={exportReport}>
+            <Download size={16} />
+            Экспорт
+          </button>
+        </div>
+      </section>
+
+      <section className="panel-section">
+        <div className="section-title">
+          <span>Закрепленные</span>
+          <Star size={16} />
+        </div>
+        <div className="shortlist">
+          {savedSites.length > 0 ? (
+            savedSites.map((site) => (
+              <div className="shortlist-row" key={site.id}>
+                <MapPin size={15} />
+                <span>{site.name}</span>
+                <strong>{Math.round(site.score * 100)}</strong>
+              </div>
+            ))
+          ) : (
+            <p className="empty-note">Кликните по карте, чтобы сравнить точки.</p>
+          )}
+        </div>
+      </section>
+    </aside>
+  )
+
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell ${isLeftPanelOpen ? '' : 'left-collapsed'} ${
+        isInspectorOpen ? '' : 'right-collapsed'
+      }`}
+    >
       <aside className="control-panel" aria-label="Настройки карты">
         <header className="panel-header">
           <div>
             <p className="eyebrow">{activeCity.state}</p>
             <h1>Карта пригодности жилья</h1>
           </div>
-          <button
-            className="icon-button"
-            type="button"
-            onClick={refreshData}
-            aria-label="Обновить данные"
-            title="Обновить данные"
-          >
-            {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
-          </button>
         </header>
-
-        <div className="status-strip">
-          <span>{loadingHeadline}</span>
-          <span>{loadProgress}%</span>
-          <span>{appliedCellSizeMeters} м grid</span>
-        </div>
 
         <section className="load-panel" aria-label="Статус загрузки">
           <div className="load-head">
@@ -4155,107 +4418,20 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Локация</span>
-            <MapPin size={16} />
+            <span>Регион</span>
+            <SlidersHorizontal size={16} />
           </div>
-          <div className="select-grid">
-            <label className="select-field">
-              <span>Штат</span>
-              <select
-                value={selectedState}
-              onChange={(event) => {
-                const nextState = event.target.value
-
-                setSelectedState(nextState)
-                setSelectedRegionBounds(null)
-                setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
-              }}
-              >
-                {US_STATES.map((state) => (
-                  <option key={state.code} value={state.code}>
-                    {state.code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="select-field">
-              <span>Город</span>
-              <input
-                list="major-city-options"
-                placeholder={activeCityLabel}
-                type="text"
-                value={citySearchText}
-                onChange={(event) => setCitySearchText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    searchCity()
-                  }
-                }}
-              />
-              <datalist id="major-city-options">
-                {suggestedCityNames.map((city) => (
-                  <option key={`${selectedState}-${city}`} value={city} />
-                ))}
-              </datalist>
-            </label>
-          </div>
-          <div className="resolution-row">
-            <span>
-              Активно: {activeCityLabel}, {activeCity.state}
-            </span>
-            <button
-              className="text-button"
-              disabled={isSearchingCity || citySearchText.trim().length === 0}
-              type="button"
-              onClick={searchCity}
-            >
-              {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
-              Найти
-            </button>
-          </div>
-          <div className="resolution-row">
-            <input
-              className="inline-input"
-              inputMode="numeric"
-              placeholder="ZIP code"
-              type="text"
-              value={zipSearchText}
-              onChange={(event) => setZipSearchText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  searchZip()
-                }
-              }}
-            />
-            <button
-              className="text-button"
-              disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
-              type="button"
-              onClick={searchZip}
-            >
-              {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
-              ZIP
-            </button>
-          </div>
-          <div className="resolution-row">
-            <span>
+          <div className="source-grid">
+            <span>Активно</span>
+            <strong>{activeCityLabel}, {activeCity.state}</strong>
+            <span>Выделение</span>
+            <strong>
               {selectedRegionBounds
-                ? `Регион: ${formatBoundsSummary(selectedRegionBounds)}`
+                ? formatBoundsSummary(selectedRegionBounds)
                 : isRegionSelectMode
-                  ? 'Зажмите и протяните по карте'
-                  : 'Регион не выделен'}
-            </span>
-            <button
-              className={`text-button ${isRegionSelectMode ? 'active' : ''}`}
-              type="button"
-              onClick={() => {
-                setDraftRegionBounds(null)
-                setIsRegionSelectMode((current) => !current)
-              }}
-            >
-              <Target size={15} />
-              Регион
-            </button>
+                  ? 'выбор'
+                  : 'нет'}
+            </strong>
           </div>
           <label className="range-row">
             <span>Сетка</span>
@@ -4286,29 +4462,6 @@ const App = () => {
             </button>
           </div>
         </section>
-
-        <div className="metric-grid">
-          <div className="metric-card">
-            <BarChart3 size={16} />
-            <span>Средний</span>
-            <strong>{hasEvaluatedCells ? Math.round(averageScore * 100) : 'н/д'}</strong>
-          </div>
-          <div className="metric-card">
-            <Target size={16} />
-            <span>Точка</span>
-            <strong>{Math.round(selectedAnalysis.score * 100)}</strong>
-          </div>
-          <div className="metric-card">
-            <ShieldAlert size={16} />
-            <span>Риск</span>
-            <strong>{Math.round(selectedAnalysis.riskScore * 100)}</strong>
-          </div>
-          <div className="metric-card">
-            <Sparkles size={16} />
-            <span>Доверие</span>
-            <strong>{Math.round(selectedAnalysis.confidence * 100)}</strong>
-          </div>
-        </div>
 
         <section className="panel-section">
           <div className="section-title">
@@ -4382,7 +4535,7 @@ const App = () => {
                 type="button"
                 onClick={() => setLayerMode(mode)}
               >
-                {mode === 'suitability' ? 'Score' : mode === 'risk' ? 'Risk' : 'Upside'}
+                {mode === 'suitability' ? 'Оценка' : mode === 'risk' ? 'Риск' : 'Потенциал'}
               </button>
             ))}
           </div>
@@ -4405,92 +4558,6 @@ const App = () => {
               onChange={(event) => setOverlayOpacity(Number(event.target.value))}
             />
           </label>
-        </section>
-
-        <section className="panel-section analysis-card">
-          <div className="analysis-head">
-            <div>
-              <span className="mini-label">Выбранная точка</span>
-              <strong>{selectedAnalysis.label}</strong>
-            </div>
-            <span
-              className="score-pill large"
-              style={{ backgroundColor: colorForScore(selectedAnalysis.score) }}
-            >
-              {Math.round(selectedAnalysis.score * 100)}
-            </span>
-          </div>
-          <p className="thesis">{selectedAnalysis.thesis}</p>
-          <div className="point-context">
-            <div>
-              <span>Координаты</span>
-              <strong>
-                {selectedAnalysis.point.lat.toFixed(5)}, {selectedAnalysis.point.lng.toFixed(5)}
-              </strong>
-            </div>
-            <div>
-              <span>Главный плюс</span>
-              <strong>{selectedAnalysis.bestFactor.detail}</strong>
-            </div>
-            <div>
-              <span>Главный риск</span>
-              <strong>{selectedAnalysis.worstFactor.detail}</strong>
-            </div>
-            <div>
-              <span>Этажность рядом</span>
-              <strong>
-                {selectedBuilding.building
-                  ? `${selectedBuilding.building.levels ?? '?'} эт. · ${formatMeters(selectedBuilding.distance)}`
-                  : 'нет данных'}
-              </strong>
-            </div>
-          </div>
-          <PointCompletenessPanel
-            analysis={selectedAnalysis}
-            building={selectedBuilding.building}
-            buildingDataMode={buildingDataMode}
-            buildingDistance={selectedBuilding.distance}
-            city={activeCity}
-          />
-          <div className="factor-callouts">
-            <span>Сила: {selectedAnalysis.bestFactor.label}</span>
-            <span>Риск: {selectedAnalysis.worstFactor.label}</span>
-          </div>
-          <div className="factor-list">
-            {selectedAnalysis.factors.map((factor) => (
-              <div className="factor-row" key={factor.id}>
-                <div className="factor-meta">
-                  <span>{factor.label}</span>
-                  <strong>{Math.round(factor.score * 100)}</strong>
-                </div>
-                <div className="factor-track">
-                  <span
-                    className="factor-fill"
-                    style={{
-                      width: `${Math.round(factor.score * 100)}%`,
-                      backgroundColor: colorForScore(factor.score),
-                    }}
-                  />
-                </div>
-                <small>{factor.detail}</small>
-              </div>
-            ))}
-          </div>
-          <div className="action-row">
-            <button
-              className="text-button"
-              disabled={isSelectedSitePinned}
-              type="button"
-              onClick={addSelectedSite}
-            >
-              <Star size={16} />
-              {isSelectedSitePinned ? 'Закреплено' : 'Закрепить'}
-            </button>
-            <button className="text-button" type="button" onClick={exportReport}>
-              <Download size={16} />
-              Экспорт
-            </button>
-          </div>
         </section>
 
         <section className="panel-section">
@@ -4585,31 +4652,11 @@ const App = () => {
               <div className="rank-row" key={item.name}>
                 <span className="rank-name">{item.name}</span>
                 <span className="score-pair">
-                  <span>{Math.round(item.analysis.opportunityScore * 100)} up</span>
-                  <strong>{Math.round(item.analysis.riskScore * 100)} risk</strong>
+                  <span>{Math.round(item.analysis.opportunityScore * 100)} пот.</span>
+                  <strong>{Math.round(item.analysis.riskScore * 100)} риск</strong>
                 </span>
               </div>
             ))}
-          </div>
-        </section>
-
-        <section className="panel-section">
-          <div className="section-title">
-            <span>Shortlist</span>
-            <Star size={16} />
-          </div>
-          <div className="shortlist">
-            {savedSites.length > 0 ? (
-              savedSites.map((site) => (
-                <div className="shortlist-row" key={site.id}>
-                  <MapPin size={15} />
-                  <span>{site.name}</span>
-                  <strong>{Math.round(site.score * 100)}</strong>
-                </div>
-              ))
-            ) : (
-              <p className="empty-note">Кликните по карте, чтобы сравнить точки.</p>
-            )}
           </div>
         </section>
 
@@ -4620,15 +4667,15 @@ const App = () => {
           <div className="source-grid">
             <span>OSM</span>
             <strong>{dataMode === 'live' ? pois.length : FALLBACK_POIS.length}</strong>
-            <span>Crime</span>
+            <span>Криминал</span>
             <strong>{crimeIncidents.length}</strong>
-            <span>Noise</span>
+            <span>Шум</span>
             <strong>{noiseSegments.length}</strong>
-            <span>Traffic</span>
+            <span>Трафик</span>
             <strong>{trafficSegments.length}</strong>
-            <span>Land caps</span>
+            <span>Земля</span>
             <strong>{landPenaltyAreas.length}</strong>
-            <span>Buildings</span>
+            <span>Здания</span>
             <strong>
               {buildingDataMode === 'loading'
                 ? '...'
@@ -4638,7 +4685,7 @@ const App = () => {
             </strong>
           </div>
           {buildingIsCapped ? (
-            <p className="data-note">Buildings partial: сохранены приоритетные {buildingFootprints.length} из {buildingTotalCount}.</p>
+            <p className="data-note">Здания частично: {buildingFootprints.length} из {buildingTotalCount}.</p>
           ) : null}
         </section>
 
@@ -4662,7 +4709,9 @@ const App = () => {
       </aside>
 
       <main className="map-stage">
+        {mapTopBar}
         <MapContainer
+          attributionControl={false}
           bounds={[
             [activeCity.bounds.south, activeCity.bounds.west],
             [activeCity.bounds.north, activeCity.bounds.east],
@@ -4677,6 +4726,7 @@ const App = () => {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+          <AttributionControl position="bottomright" prefix={false} />
           <ZoomControl position="bottomright" />
           <MapViewportSync bounds={activeCity.bounds} />
           <MapClickSelector disabled={isRegionSelectMode} onSelect={setSelectedPoint} />
@@ -4704,24 +4754,7 @@ const App = () => {
               weight: 2,
             }}
             radius={9}
-          >
-            <Popup>
-              <div className="poi-popup">
-                <div className="popup-head">
-                  <strong>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</strong>
-                  <span>{Math.round(selectedAnalysis.confidence * 100)}% trust</span>
-                </div>
-                <PointCompletenessPanel
-                  analysis={selectedAnalysis}
-                  building={selectedBuilding.building}
-                  buildingDataMode={buildingDataMode}
-                  buildingDistance={selectedBuilding.distance}
-                  city={activeCity}
-                  compact
-                />
-              </div>
-            </Popup>
-          </CircleMarker>
+          />
 
           {showPois
             ? visiblePois.map((poi) => (
@@ -4748,6 +4781,7 @@ const App = () => {
             : null}
         </MapContainer>
       </main>
+      {pointInspector}
     </div>
   )
 }

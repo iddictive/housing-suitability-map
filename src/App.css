@@ -1,11 +1,23 @@
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(320px, 380px);
   width: 100vw;
   height: 100svh;
   min-height: 100svh;
   overflow: hidden;
   background: #f4f3ef;
+}
+
+.app-shell.left-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) minmax(320px, 380px);
+}
+
+.app-shell.right-collapsed {
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) 0;
+}
+
+.app-shell.left-collapsed.right-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr) 0;
 }
 
 .control-panel {
@@ -19,6 +31,28 @@
   background: rgba(255, 255, 255, 0.94);
   padding: 22px;
   box-shadow: 0 18px 45px rgba(21, 24, 31, 0.12);
+}
+
+.inspector-panel {
+  z-index: 500;
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  border-left: 1px solid #d9d7d0;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 20px;
+  box-shadow: -18px 0 45px rgba(21, 24, 31, 0.1);
+}
+
+.left-collapsed .control-panel,
+.right-collapsed .inspector-panel {
+  pointer-events: none;
+  visibility: hidden;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
 }
 
 .panel-header {
@@ -44,6 +78,21 @@
   color: #15181f;
   font-size: 27px;
   font-weight: 760;
+  line-height: 1.05;
+}
+
+.inspector-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.inspector-header h2 {
+  margin: 0;
+  color: #15181f;
+  font-size: 24px;
+  font-weight: 820;
   line-height: 1.05;
 }
 
@@ -206,6 +255,10 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.inspector-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .metric-card {
@@ -798,10 +851,66 @@
 }
 
 .map-stage {
+  position: relative;
   min-width: 0;
   width: 100%;
   height: 100svh;
   min-height: 100svh;
+}
+
+.map-topbar {
+  position: absolute;
+  z-index: 900;
+  top: 14px;
+  left: 50%;
+  display: grid;
+  grid-template-columns: auto minmax(360px, 720px) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  width: min(calc(100% - 28px), 1020px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.map-topbar > * {
+  pointer-events: auto;
+}
+
+.map-search {
+  display: grid;
+  grid-template-columns: auto 70px minmax(150px, 1fr) auto 82px auto;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid rgba(216, 214, 206, 0.95);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 6px 8px;
+  box-shadow: 0 12px 34px rgba(21, 24, 31, 0.12);
+  backdrop-filter: blur(14px);
+}
+
+.map-search svg {
+  color: #687181;
+}
+
+.map-search input,
+.map-search select {
+  min-width: 0;
+  border: 0;
+  border-radius: 7px;
+  background: #f4f3ef;
+  color: #15181f;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 760;
+  padding: 7px 8px;
+  outline: none;
+}
+
+.map-search input:focus,
+.map-search select:focus {
+  box-shadow: inset 0 0 0 1px #15181f;
 }
 
 .housing-map {
@@ -817,6 +926,15 @@
 .leaflet-container {
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.leaflet-control-attribution {
+  border-radius: 7px 0 0 0;
+  background: rgba(255, 255, 255, 0.8) !important;
+  color: #5e6675 !important;
+  font-size: 10px !important;
+  line-height: 1.3 !important;
+  padding: 2px 5px !important;
 }
 
 .suitability-canvas {
@@ -866,7 +984,7 @@
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(58svh, 1fr) auto;
+    grid-template-rows: minmax(56svh, 1fr) auto auto;
   }
 
   .control-panel {
@@ -879,12 +997,42 @@
     padding: 16px;
   }
 
+  .inspector-panel {
+    order: 3;
+    min-height: auto;
+    max-height: 36svh;
+    overflow: auto;
+    border-top: 1px solid #d9d7d0;
+    border-left: 0;
+    padding: 16px;
+  }
+
+  .left-collapsed .control-panel,
+  .right-collapsed .inspector-panel {
+    display: none;
+  }
+
   .map-stage {
-    min-height: 58svh;
+    min-height: 56svh;
   }
 
   .housing-map {
-    height: 58svh;
+    height: 56svh;
+  }
+
+  .map-topbar {
+    top: 10px;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    width: calc(100% - 20px);
+  }
+
+  .map-search {
+    grid-template-columns: auto 58px minmax(90px, 1fr);
+  }
+
+  .map-search .text-button,
+  .map-search input[aria-label='ZIP code'] {
+    display: none;
   }
 
   .panel-header h1 {
