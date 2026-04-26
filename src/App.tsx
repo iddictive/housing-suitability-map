@@ -809,7 +809,31 @@ type NominatimPlace = {
   lat: string
   lon: string
   display_name: string
+  addresstype?: string
+  type?: string
+  address?: Record<string, string | undefined>
   boundingbox?: [string, string, string, string]
+}
+
+const isCityLevelPlace = (place: NominatimPlace) => {
+  const address = place.address ?? {}
+  const hasLocality = Boolean(
+    address.city ||
+      address.town ||
+      address.village ||
+      address.municipality ||
+      address.borough ||
+      address.township ||
+      address.hamlet,
+  )
+
+  if (hasLocality) {
+    return true
+  }
+
+  return ['city', 'town', 'village', 'municipality', 'borough', 'township', 'hamlet'].includes(
+    place.addresstype ?? '',
+  )
 }
 
 const cityConfigFromNominatimPlace = (
@@ -851,8 +875,13 @@ const cityConfigFromNominatimPlace = (
 
 const fetchCityConfig = async (stateCode: string, cityName: string): Promise<CityConfig> => {
   const state = US_STATES.find((item) => item.code === stateCode)
+  const city = cityName.trim()
 
-  if (!state || cityName.trim().length === 0) {
+  if (!state || city.length === 0) {
+    throw new Error('city required')
+  }
+
+  if ([state.name.toLowerCase(), state.code.toLowerCase()].includes(city.toLowerCase())) {
     throw new Error('city required')
   }
 
@@ -861,9 +890,9 @@ const fetchCityConfig = async (stateCode: string, cityName: string): Promise<Cit
     limit: '1',
     countrycodes: 'us',
     addressdetails: '1',
-    q: `${cityName.trim()}, ${state.name}, USA`,
+    q: `${city}, ${state.name}, USA`,
   })
-  const cacheKey = `geocode:${stateCode}:${cityName.trim().toLowerCase()}`
+  const cacheKey = `geocode:${stateCode}:${city.toLowerCase()}`
   const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
 
@@ -873,13 +902,11 @@ const fetchCityConfig = async (stateCode: string, cityName: string): Promise<Cit
 
     return (await response.json()) as NominatimPlace[]
   })
-  const place = places[0]
+  const place = places.find(isCityLevelPlace)
 
   if (!place) {
     throw new Error('city not found')
   }
-
-  const city = cityName.trim()
 
   return cityConfigFromNominatimPlace(place, stateCode, city, 'custom')
 }
@@ -3285,6 +3312,14 @@ const App = () => {
           setPois(nextPois)
           setDataMode(nextDataMode)
           setLoadStage('osm', { status: 'live', count: nextPois.length, detail: 'loaded' })
+        } else if (poiResult.status === 'fulfilled') {
+          setPois(nextPois)
+          setDataMode(nextDataMode)
+          setLoadStage('osm', {
+            status: nextPois.length > 0 ? 'partial' : 'empty',
+            count: nextPois.length,
+            detail: nextPois.length > 0 ? 'fallback' : 'no amenities',
+          })
         } else {
           setPois(nextPois)
           setDataMode(nextDataMode)
@@ -3652,6 +3687,14 @@ const App = () => {
 
       if (status === 'idle') {
         return 0
+      }
+
+      if (status === 'error') {
+        return 0.65
+      }
+
+      if (status === 'partial') {
+        return 0.85
       }
 
       return 1
