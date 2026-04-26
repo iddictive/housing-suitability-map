@@ -2177,6 +2177,7 @@ const mixSuitabilityField = (
   criteria: Criterion[],
   spatialField: SpatialFactorField,
   buildingFootprints: BuildingFootprint[],
+  buildingEligibilityActive: boolean,
 ): SuitabilityField => {
   const cellCount = spatialField.cols * spatialField.rows
   const rawScores = new Float32Array(cellCount)
@@ -2224,7 +2225,8 @@ const mixSuitabilityField = (
   }
 
   const residentialEvidenceThreshold = Math.max(24, Math.floor(cellCount * 0.008))
-  const hasResidentialEvidence = residentialCandidateCellCount >= residentialEvidenceThreshold
+  const hasResidentialEvidence =
+    buildingEligibilityActive && residentialCandidateCellCount >= residentialEvidenceThreshold
 
   for (let index = 0; index < cellCount; index += 1) {
     let score = 0.5
@@ -3565,9 +3567,22 @@ const App = () => {
     ],
   )
 
+  const buildingEligibilityActive = useMemo(
+    () =>
+      (buildingDataMode === 'live' || buildingDataMode === 'partial') &&
+      buildingFootprints.some((building) => building.use === 'residential'),
+    [buildingDataMode, buildingFootprints],
+  )
+
   const suitabilityField = useMemo(
-    () => mixSuitabilityField(criteria, spatialFactorField, buildingFootprints),
-    [buildingFootprints, criteria, spatialFactorField],
+    () =>
+      mixSuitabilityField(
+        criteria,
+        spatialFactorField,
+        buildingFootprints,
+        buildingEligibilityActive,
+      ),
+    [buildingEligibilityActive, buildingFootprints, criteria, spatialFactorField],
   )
 
   const neighborhoodScores = useMemo(
