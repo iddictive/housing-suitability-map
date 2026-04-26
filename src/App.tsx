@@ -76,6 +76,7 @@ type NoiseSegment = {
   id: string
   name: string
   kind: NoiseSourceKind
+  roadClass?: string
   points: LatLng[]
 }
 
@@ -1118,6 +1119,7 @@ const elementToNoiseSegment = (element: OverpassElement): NoiseSegment | null =>
     id: `${element.type}-${element.id}`,
     name: element.tags?.name ?? element.tags?.aeroway ?? element.tags?.railway ?? element.tags?.highway ?? kind,
     kind,
+    roadClass: highway,
     points: element.geometry.map((point) => ({
       lat: point.lat,
       lng: point.lon,
@@ -1720,6 +1722,35 @@ const fetchTrafficSegments = async (signal: AbortSignal, bounds: MapBounds, forc
 
   return segments
 }
+
+const inferredAadtFromRoadClass = (roadClass?: string) => {
+  if (roadClass === 'motorway') {
+    return 82_000
+  }
+
+  if (roadClass === 'trunk') {
+    return 58_000
+  }
+
+  if (roadClass === 'primary') {
+    return 36_000
+  }
+
+  if (roadClass === 'secondary') {
+    return 18_000
+  }
+
+  return 9_000
+}
+
+const trafficSegmentsFromOsmRoads = (segments: NoiseSegment[]): TrafficSegment[] =>
+  segments
+    .filter((segment) => segment.kind === 'road' && segment.points.length >= 2)
+    .map((segment) => ({
+      id: `osm-${segment.id}`,
+      aadt: inferredAadtFromRoadClass(segment.roadClass),
+      points: segment.points,
+    }))
 
 const scoreByDistance = (distance: number, criterion: Criterion) => {
   if (!Number.isFinite(distance)) {
@@ -2443,7 +2474,15 @@ const loadStatusText = (stage: LoadStage) => {
   }
 
   if (stage.status === 'empty') {
-    return stage.detail === 'unsupported' ? 'н/д' : 'нет'
+    if (stage.detail === 'unsupported') {
+      return 'н/д'
+    }
+
+    if (stage.detail === 'Boston only') {
+      return stage.detail
+    }
+
+    return 'нет'
   }
 
   if (stage.status === 'error') {
@@ -3283,7 +3322,7 @@ const App = () => {
           setLoadStage('crime', {
             status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
             count: snapshot.crimeIncidents.length,
-            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'unsupported',
+            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'Boston only',
           })
           setLoadStage('noise', {
             status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
@@ -3293,7 +3332,7 @@ const App = () => {
           setLoadStage('traffic', {
             status: snapshot.trafficSegments.length > 0 ? 'cached' : 'empty',
             count: snapshot.trafficSegments.length,
-            detail: activeCity.state === 'MA' ? 'snapshot' : 'unsupported',
+            detail: snapshot.trafficSegments.length > 0 ? 'snapshot' : 'OSM road proxy',
           })
           return
         }
@@ -3304,13 +3343,13 @@ const App = () => {
       setLoadStage('crime', {
         status: activeCity.id === 'ma-boston' ? 'loading' : 'empty',
         count: 0,
-        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'unsupported',
+        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'Boston only',
       })
       setLoadStage('noise', { status: 'loading', count: undefined, detail: 'roads + masks' })
       setLoadStage('traffic', {
-        status: activeCity.state === 'MA' ? 'loading' : 'empty',
+        status: 'loading',
         count: 0,
-        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'unsupported',
+        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'OSM road proxy',
       })
     })
 
@@ -3345,7 +3384,17 @@ const App = () => {
           noiseResult.status === 'fulfilled' ? noiseResult.value.segments : []
         const nextLandPenaltyAreas =
           noiseResult.status === 'fulfilled' ? noiseResult.value.areas : []
-        const nextTrafficSegments = trafficResult.status === 'fulfilled' ? trafficResult.value : []
+        const fallbackTrafficSegments =
+          noiseResult.status === 'fulfilled'
+            ? trafficSegmentsFromOsmRoads(noiseResult.value.segments)
+            : []
+        const nextTrafficSegments =
+          trafficResult.status === 'fulfilled' && trafficResult.value.length > 0
+            ? trafficResult.value
+            : fallbackTrafficSegments
+        const trafficUsesFallback =
+          nextTrafficSegments.length > 0 &&
+          !(trafficResult.status === 'fulfilled' && trafficResult.value.length > 0)
 
         if (poiResult.status === 'fulfilled' && poiResult.value.length > 0) {
           setPois(nextPois)
@@ -3376,7 +3425,7 @@ const App = () => {
           setLoadStage('crime', {
             status: nextCrimeIncidents.length > 0 ? 'live' : 'empty',
             count: nextCrimeIncidents.length,
-            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'unsupported',
+            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'Boston only',
           })
         } else {
           setCrimeIncidents(nextCrimeIncidents)
@@ -3403,9 +3452,16 @@ const App = () => {
         if (trafficResult.status === 'fulfilled') {
           setTrafficSegments(nextTrafficSegments)
           setLoadStage('traffic', {
-            status: nextTrafficSegments.length > 0 ? 'live' : 'empty',
+            status: trafficUsesFallback ? 'partial' : nextTrafficSegments.length > 0 ? 'live' : 'empty',
             count: nextTrafficSegments.length,
-            detail: activeCity.state === 'MA' ? 'loaded' : 'unsupported',
+            detail: trafficUsesFallback ? 'OSM proxy' : activeCity.state === 'MA' ? 'loaded' : 'no roads',
+          })
+        } else if (trafficUsesFallback) {
+          setTrafficSegments(nextTrafficSegments)
+          setLoadStage('traffic', {
+            status: 'partial',
+            count: nextTrafficSegments.length,
+            detail: 'OSM proxy',
           })
         } else {
           setTrafficSegments(nextTrafficSegments)
@@ -3704,20 +3760,16 @@ const App = () => {
       dataMode === 'live' ? 1 : 0.42,
       noiseSegments.length > 0 ? 1 : 0,
       landPenaltyAreas.length > 0 ? 1 : 0,
+      trafficSegments.length > 0 ? 1 : 0,
     ]
 
     if (activeCity.id === 'ma-boston') {
       sourceScores.push(crimeDataMode === 'live' ? 1 : 0)
     }
 
-    if (activeCity.state === 'MA') {
-      sourceScores.push(trafficSegments.length > 0 ? 1 : 0)
-    }
-
     return sourceScores.reduce((total, score) => total + score, 0) / sourceScores.length
   }, [
     activeCity.id,
-    activeCity.state,
     crimeDataMode,
     dataMode,
     landPenaltyAreas.length,
