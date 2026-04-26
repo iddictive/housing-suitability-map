@@ -557,27 +557,27 @@ const INITIAL_CRITERIA: Criterion[] = [
 const EVALUATION_PROFILES: EvaluationProfile[] = [
   {
     id: 'balanced',
-    label: 'Balanced',
+    label: 'Баланс',
     weights: { parks: 58, groceries: 86, noise: 76, transit: 58, center: 42, crime: 96 },
   },
   {
     id: 'quiet',
-    label: 'Quiet premium',
+    label: 'Тихий премиум',
     weights: { parks: 64, groceries: 64, noise: 100, transit: 38, center: 28, crime: 100 },
   },
   {
     id: 'carfree',
-    label: 'Car-free',
+    label: 'Без авто',
     weights: { parks: 50, groceries: 92, noise: 70, transit: 96, center: 68, crime: 88 },
   },
   {
     id: 'family',
-    label: 'Family',
+    label: 'Семья',
     weights: { parks: 84, groceries: 86, noise: 90, transit: 48, center: 24, crime: 100 },
   },
   {
     id: 'investor',
-    label: 'Investor',
+    label: 'Инвестор',
     weights: { parks: 46, groceries: 78, noise: 72, transit: 86, center: 74, crime: 92 },
   },
 ]
@@ -4244,7 +4244,7 @@ const App = () => {
       <header className="inspector-header">
         <div>
           <p className="eyebrow">Точка</p>
-          <h2>{Math.round(selectedAnalysis.score * 100)} · {selectedAnalysis.label}</h2>
+          <h2>{selectedAnalysis.label}</h2>
         </div>
         <button
           className="icon-button"
@@ -4256,6 +4256,19 @@ const App = () => {
           <PanelRightClose size={18} />
         </button>
       </header>
+
+      <div className="inspector-score">
+        <span
+          className="inspector-score-value"
+          style={{ backgroundColor: colorForScore(selectedAnalysis.score) }}
+        >
+          {Math.round(selectedAnalysis.score * 100)}
+        </span>
+        <div>
+          <span>Риск {Math.round(selectedAnalysis.riskScore * 100)}</span>
+          <strong>Доверие {Math.round(selectedAnalysis.confidence * 100)}%</strong>
+        </div>
+      </div>
 
       <div className="metric-grid inspector-metrics">
         <div className="metric-card">
@@ -4373,7 +4386,7 @@ const App = () => {
               </div>
             ))
           ) : (
-            <p className="empty-note">Кликните по карте, чтобы сравнить точки.</p>
+            <p className="empty-note">Нет закрепленных точек.</p>
           )}
         </div>
       </section>
