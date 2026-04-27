@@ -32,6 +32,7 @@ import {
   Target,
   TrainFront,
   TreePine,
+  UserRoundSearch,
   Volume2,
 } from 'lucide-react'
 import {
@@ -55,6 +56,7 @@ import {
   PARK_SCORE_FLOOR,
   RAIL_HARD_NOISE_METERS,
   RAIL_SOFT_NOISE_METERS,
+  REGISTRY_RISK_RADIUS_METERS,
   RESIDENTIAL_BUILDING_EVIDENCE_METERS,
   RESOLUTION_OPTIONS,
   ROAD_SURFACE_NO_GO_BUFFER_METERS,
@@ -85,6 +87,12 @@ import {
   pointInPolygon,
   pointToSegmentDistanceMeters,
 } from './domain/geo'
+import { fetchRegistryRiskPoints, registryRiskScoreAtPoint } from './domain/registryRisk'
+import type {
+  Bounds as LeafletBounds,
+  LatLngBounds as LeafletLatLngBounds,
+  ZoomAnimEvent,
+} from 'leaflet'
 import type {
   ArcGisPolylineFeature,
   BuildingDataMode,
@@ -117,6 +125,8 @@ import type {
   PointAnalysis,
   PointDataItem,
   ProjectedPoi,
+  RegistryDataMode,
+  RegistryRiskPoint,
   SavedSite,
   SpatialFactorField,
   SuitabilityField,
@@ -1265,6 +1275,7 @@ const trafficNoiseScore = (distanceMeters: number, aadt: number) => {
 const buildSpatialFactorField = (
   poisByCategory: Record<PoiCategory, Poi[]>,
   crimeIncidents: CrimeIncident[],
+  registryRiskPoints: RegistryRiskPoint[],
   noiseSegments: NoiseSegment[],
   landPenaltyAreas: LandPenaltyArea[],
   trafficSegments: TrafficSegment[],
@@ -1280,8 +1291,11 @@ const buildSpatialFactorField = (
   const rows = Math.ceil(heightMeters / cellSizeMeters)
   const cellCount = cols * rows
   const crimeRadiusCells = Math.max(1, Math.ceil(CRIME_RADIUS_METERS / cellSizeMeters))
+  const registryRadiusCells = Math.max(1, Math.ceil(REGISTRY_RISK_RADIUS_METERS / cellSizeMeters))
   const crimeBins = new Uint16Array(cellCount)
   const crimeDensity = new Float32Array(cellCount)
+  const registryBins = new Float32Array(cellCount)
+  const registryDensity = new Float32Array(cellCount)
   const transportNoiseByCell = new Float32Array(cellCount)
   const landScoreCapByCell = new Float32Array(cellCount)
   const waterMaskByCell = new Uint8Array(cellCount)
@@ -1298,6 +1312,7 @@ const buildSpatialFactorField = (
     transit: new Float32Array(cellCount),
     center: new Float32Array(cellCount),
     crime: new Float32Array(cellCount),
+    registry: new Float32Array(cellCount),
   } satisfies Record<CriterionId, Float32Array>
   const projectedPois = {
     parks: poisByCategory.parks.map((poi) => projectPoi(poi, bounds, metersPerDegreeLng)),
@@ -1375,6 +1390,16 @@ const buildSpatialFactorField = (
     }
   }
 
+  for (const registryPoint of registryRiskPoints) {
+    const point = project(registryPoint)
+    const column = Math.floor(point.x / cellSizeMeters)
+    const row = Math.floor(point.y / cellSizeMeters)
+
+    if (column >= 0 && column < cols && row >= 0 && row < rows) {
+      registryBins[row * cols + column] += registryPoint.weight
+    }
+  }
+
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < cols; column += 1) {
       let density = 0
@@ -1400,6 +1425,34 @@ const buildSpatialFactorField = (
       }
 
       crimeDensity[row * cols + column] = density
+    }
+  }
+
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < cols; column += 1) {
+      let density = 0
+
+      for (let dy = -registryRadiusCells; dy <= registryRadiusCells; dy += 1) {
+        for (let dx = -registryRadiusCells; dx <= registryRadiusCells; dx += 1) {
+          const sourceColumn = column + dx
+          const sourceRow = row + dy
+
+          if (sourceColumn < 0 || sourceColumn >= cols || sourceRow < 0 || sourceRow >= rows) {
+            continue
+          }
+
+          const distanceCells = Math.hypot(dx, dy)
+
+          if (distanceCells > registryRadiusCells) {
+            continue
+          }
+
+          const weight = Math.exp(-(distanceCells * distanceCells) / 2.2)
+          density += registryBins[sourceRow * cols + sourceColumn] * weight
+        }
+      }
+
+      registryDensity[row * cols + column] = density
     }
   }
 
@@ -1569,6 +1622,8 @@ const buildSpatialFactorField = (
 
   const averageCrimeDensity =
     crimeDensity.reduce((total, density) => total + density, 0) / Math.max(1, cellCount)
+  const averageRegistryDensity =
+    registryDensity.reduce((total, density) => total + density, 0) / Math.max(1, cellCount)
 
   for (let row = 0; row < rows; row += 1) {
     for (let column = 0; column < cols; column += 1) {
@@ -1583,6 +1638,10 @@ const buildSpatialFactorField = (
 
       factorScores.crime[index] =
         crimeIncidents.length > 0 ? clamp(1 - crimeDensity[index] / (baseline * 3.1)) : 0.5
+      factorScores.registry[index] =
+        registryRiskPoints.length > 0
+          ? clamp(1 - registryDensity[index] / (Math.max(averageRegistryDensity * 1.6, 0.18) * 2.6))
+          : 0.5
       factorScores.center[index] = scoreByDistance(
         Math.hypot(x - center.x, y - center.y) / 1000,
         criteriaById.center,
@@ -1629,6 +1688,7 @@ const buildSpatialFactorField = (
     overlayExclusionLines,
     noGoOverlayAreas,
     averageCrimeDensity,
+    averageRegistryDensity,
     noiseSegmentCount: noiseSegments.length,
     trafficSegmentCount: trafficSegments.length,
     landPenaltyAreaCount: landPenaltyAreas.length,
@@ -1725,6 +1785,7 @@ const mixSuitabilityField = (
     averageScore: scoreTotal / Math.max(1, habitableCellCount),
     evaluatedCellCount: habitableCellCount,
     averageCrimeDensity: spatialField.averageCrimeDensity,
+    averageRegistryDensity: spatialField.averageRegistryDensity,
     noiseSegmentCount: spatialField.noiseSegmentCount,
     trafficSegmentCount: spatialField.trafficSegmentCount,
     landPenaltyAreaCount: spatialField.landPenaltyAreaCount,
@@ -2170,6 +2231,7 @@ const analyzePoint = (
   field: SuitabilityField,
   poisByCategory: Record<PoiCategory, Poi[]>,
   crimeIncidents: CrimeIncident[],
+  registryRiskPoints: RegistryRiskPoint[],
   noiseSegments: NoiseSegment[],
   landPenaltyAreas: LandPenaltyArea[],
   trafficSegments: TrafficSegment[],
@@ -2216,6 +2278,13 @@ const analyzePoint = (
     criteriaById.center,
   )
   const crimeScore = crimeScoreAtPoint(point, crimeIncidents, field.averageCrimeDensity, bounds, field.metersPerDegreeLng)
+  const registryScore = registryRiskScoreAtPoint(
+    point,
+    registryRiskPoints,
+    field.averageRegistryDensity,
+    bounds,
+    field.metersPerDegreeLng,
+  )
   const landCap = landCapAtPoint(meters.x, meters.y, landPenaltyAreas, bounds, field.metersPerDegreeLng)
   const hasOverlayInclusion = Boolean(field.overlayInclusionMaskByCell[cellIndex])
   const hasOverlayExclusion = Boolean(field.overlayExclusionMaskByCell[cellIndex])
@@ -2305,6 +2374,19 @@ const analyzePoint = (
               : 'выше среднего',
     },
     {
+      id: 'registry',
+      label: 'Реестр',
+      score: registryScore,
+      detail:
+        registryRiskPoints.length === 0
+          ? 'нет данных'
+          : registryScore >= 0.65
+            ? 'низкий фон'
+            : registryScore >= 0.4
+              ? 'умеренный фон'
+              : 'повышенный фон',
+    },
+    {
       id: 'land',
       label: 'Земля',
       score: landFactorScore,
@@ -2315,9 +2397,14 @@ const analyzePoint = (
   const sortedFactors = [...factors].sort((a, b) => a.score - b.score)
   const worstFactor = sortedFactors[0]
   const bestFactor = sortedFactors[sortedFactors.length - 1]
-  const riskScore = 1 - Math.min(noiseScore, crimeScore, landFactorScore)
+  const riskScore = 1 - Math.min(noiseScore, crimeScore, registryScore, landFactorScore)
   const opportunityScore = clamp(score * 0.72 + transitScore * 0.14 + groceryScore * 0.14 - riskScore * 0.18)
-  const confidence = clamp(dataCoverage * 0.72 + (landCap < 1 ? 0.08 : 0.16) + (crimeIncidents.length > 0 ? 0.12 : 0))
+  const confidence = clamp(
+    dataCoverage * 0.72 +
+      (landCap < 1 ? 0.08 : 0.16) +
+      (crimeIncidents.length > 0 ? 0.08 : 0) +
+      (registryRiskPoints.length > 0 ? 0.04 : 0),
+  )
   const landConfidence = isUnscorableLand ? 0 : hasResidentialEvidence ? 1 : 0.55
   const adjustedConfidence = Math.min(confidence, clamp(0.42 + landConfidence * 0.58))
   const dataCompleteness: PointDataItem[] = [
@@ -2335,6 +2422,11 @@ const analyzePoint = (
       label: 'Криминал',
       value: crimeIncidents.length > 0 ? `радиус ${CRIME_RADIUS_METERS} м` : 'нет live данных',
       tone: crimeIncidents.length > 0 ? 'good' : 'bad',
+    },
+    {
+      label: 'Реестр',
+      value: registryRiskPoints.length > 0 ? `радиус ${REGISTRY_RISK_RADIUS_METERS} м` : 'нет данных',
+      tone: registryRiskPoints.length > 0 ? 'warn' : 'neutral',
     },
     {
       label: 'Шум',
@@ -2393,6 +2485,14 @@ const SuitabilityCanvasOverlay = ({
   const map = useMap()
 
   useEffect(() => {
+    type ZoomAnimationMap = typeof map & {
+      _latLngBoundsToNewLayerBounds: (
+        bounds: LeafletLatLngBounds,
+        zoom: number,
+        center: ZoomAnimEvent['center'],
+      ) => LeafletBounds
+    }
+
     const canvas = document.createElement('canvas')
     const context = canvas.getContext('2d')
     const pane = map.getPanes().overlayPane
@@ -2401,7 +2501,8 @@ const SuitabilityCanvasOverlay = ({
       return undefined
     }
 
-    canvas.className = 'suitability-canvas'
+    canvas.className = 'suitability-canvas leaflet-zoom-animated'
+    canvas.style.transformOrigin = '0 0'
     pane.append(canvas)
 
     const offscreen = document.createElement('canvas')
@@ -2458,11 +2559,17 @@ const SuitabilityCanvasOverlay = ({
     let canvasWidth = 0
     let canvasHeight = 0
     let isInteracting = false
+    let isZooming = false
+    let canvasBounds = map.getBounds()
 
     const AREA_DETAIL_MIN_ZOOM = 12
     const ROAD_DETAIL_MIN_ZOOM = 15
 
     const draw = () => {
+      if (isZooming) {
+        return
+      }
+
       const size = map.getSize()
       const deviceScale = window.devicePixelRatio || 1
       const zoom = map.getZoom()
@@ -2488,6 +2595,7 @@ const SuitabilityCanvasOverlay = ({
         canvas.style.height = `${size.y}px`
       }
 
+      canvasBounds = map.getBounds()
       canvas.style.transform = `translate3d(${topLeft.x}px, ${topLeft.y}px, 0)`
       context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0)
       context.clearRect(0, 0, size.x, size.y)
@@ -2524,7 +2632,7 @@ const SuitabilityCanvasOverlay = ({
       })
     }
 
-    const handleInteractionStart = () => {
+    const handleMoveStart = () => {
       if (isInteracting) {
         return
       }
@@ -2533,7 +2641,30 @@ const SuitabilityCanvasOverlay = ({
       scheduleDraw()
     }
 
+    const handleZoomStart = () => {
+      isInteracting = true
+      isZooming = true
+    }
+
+    const handleZoomAnimation = (event: ZoomAnimEvent) => {
+      const animatedMap = map as ZoomAnimationMap
+      const scale = map.getZoomScale(event.zoom)
+      const nextBounds = animatedMap._latLngBoundsToNewLayerBounds(
+        canvasBounds,
+        event.zoom,
+        event.center,
+      )
+      const offset = nextBounds.min
+
+      if (!offset) {
+        return
+      }
+
+      canvas.style.transform = `translate3d(${offset.x}px, ${offset.y}px, 0) scale(${scale})`
+    }
+
     const handleInteractionEnd = () => {
+      isZooming = false
       isInteracting = false
       scheduleDraw()
     }
@@ -2651,8 +2782,10 @@ const SuitabilityCanvasOverlay = ({
     }
 
     draw()
-    map.on('movestart zoomstart', handleInteractionStart)
-    map.on('move zoom resize viewreset', scheduleDraw)
+    map.on('movestart', handleMoveStart)
+    map.on('zoomstart', handleZoomStart)
+    map.on('zoomanim', handleZoomAnimation)
+    map.on('move resize viewreset', scheduleDraw)
     map.on('moveend zoomend', handleInteractionEnd)
 
     const pulse = () => {
@@ -2677,8 +2810,10 @@ const SuitabilityCanvasOverlay = ({
         window.cancelAnimationFrame(pulseFrameId)
       }
 
-      map.off('movestart zoomstart', handleInteractionStart)
-      map.off('move zoom resize viewreset', scheduleDraw)
+      map.off('movestart', handleMoveStart)
+      map.off('zoomstart', handleZoomStart)
+      map.off('zoomanim', handleZoomAnimation)
+      map.off('move resize viewreset', scheduleDraw)
       map.off('moveend zoomend', handleInteractionEnd)
       canvas.remove()
     }
@@ -2900,6 +3035,7 @@ const App = () => {
   const [criteria, setCriteria] = useState(INITIAL_CRITERIA)
   const [pois, setPois] = useState<Poi[]>(FALLBACK_POIS)
   const [crimeIncidents, setCrimeIncidents] = useState<CrimeIncident[]>([])
+  const [registryRiskPoints, setRegistryRiskPoints] = useState<RegistryRiskPoint[]>([])
   const [noiseSegments, setNoiseSegments] = useState<NoiseSegment[]>([])
   const [landPenaltyAreas, setLandPenaltyAreas] = useState<LandPenaltyArea[]>([])
   const [trafficSegments, setTrafficSegments] = useState<TrafficSegment[]>([])
@@ -2911,6 +3047,7 @@ const App = () => {
   const [isLoading, setIsLoading] = useState(true)
   const [dataMode, setDataMode] = useState<DataMode>('sample')
   const [crimeDataMode, setCrimeDataMode] = useState<CrimeDataMode>('empty')
+  const [registryDataMode, setRegistryDataMode] = useState<RegistryDataMode>('empty')
   const [error, setError] = useState<string | null>(null)
   const [showPois, setShowPois] = useState(false)
   const [showOverlay, setShowOverlay] = useState(true)
@@ -3023,11 +3160,13 @@ const App = () => {
         if (snapshot) {
           setPois(snapshot.pois)
           setCrimeIncidents(snapshot.crimeIncidents)
+          setRegistryRiskPoints(snapshot.registryRiskPoints ?? [])
           setNoiseSegments(snapshot.noiseSegments)
           setLandPenaltyAreas(snapshot.landPenaltyAreas)
           setTrafficSegments(snapshot.trafficSegments)
           setDataMode(snapshot.dataMode)
           setCrimeDataMode(snapshot.crimeDataMode)
+          setRegistryDataMode(snapshot.registryDataMode ?? 'empty')
           setError(null)
           setIsLoading(false)
           setLoadStage('osm', {
@@ -3039,6 +3178,11 @@ const App = () => {
             status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
             count: snapshot.crimeIncidents.length,
             detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'Boston only',
+          })
+          setLoadStage('registry', {
+            status: snapshot.registryDataMode === 'live' ? 'cached' : 'empty',
+            count: snapshot.registryRiskPoints?.length ?? 0,
+            detail: snapshot.registryDataMode === 'live' ? 'snapshot' : 'local dataset',
           })
           setLoadStage('noise', {
             status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
@@ -3061,6 +3205,7 @@ const App = () => {
         count: 0,
         detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'Boston only',
       })
+      setLoadStage('registry', { status: 'loading', count: 0, detail: 'sanitized local' })
       setLoadStage('noise', { status: 'loading', count: undefined, detail: 'roads + masks' })
       setLoadStage('traffic', {
         status: 'loading',
@@ -3074,12 +3219,13 @@ const App = () => {
       activeCity.id === 'ma-boston'
         ? fetchCrimeIncidents(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
+      fetchRegistryRiskPoints(controller.signal, activeCity.bounds, forceRefresh),
       fetchNoiseSegments(controller.signal, activeCity.bounds, forceRefresh),
       activeCity.state === 'MA'
         ? fetchTrafficSegments(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
     ])
-      .then(([poiResult, crimeResult, noiseResult, trafficResult]) => {
+      .then(([poiResult, crimeResult, registryResult, noiseResult, trafficResult]) => {
         if (controller.signal.aborted) {
           return
         }
@@ -3096,6 +3242,9 @@ const App = () => {
         const nextCrimeIncidents = crimeResult.status === 'fulfilled' ? crimeResult.value : []
         const nextCrimeDataMode: CrimeDataMode =
           crimeResult.status === 'fulfilled' && crimeResult.value.length > 0 ? 'live' : 'empty'
+        const nextRegistryRiskPoints = registryResult.status === 'fulfilled' ? registryResult.value : []
+        const nextRegistryDataMode: RegistryDataMode =
+          registryResult.status === 'fulfilled' && registryResult.value.length > 0 ? 'live' : 'empty'
         const nextNoiseSegments =
           noiseResult.status === 'fulfilled' ? noiseResult.value.segments : []
         const nextLandPenaltyAreas =
@@ -3150,6 +3299,21 @@ const App = () => {
           errors.push('crime')
         }
 
+        if (registryResult.status === 'fulfilled') {
+          setRegistryRiskPoints(nextRegistryRiskPoints)
+          setRegistryDataMode(nextRegistryDataMode)
+          setLoadStage('registry', {
+            status: nextRegistryRiskPoints.length > 0 ? 'live' : 'empty',
+            count: nextRegistryRiskPoints.length,
+            detail: nextRegistryRiskPoints.length > 0 ? 'loaded' : 'no local points',
+          })
+        } else {
+          setRegistryRiskPoints([])
+          setRegistryDataMode('empty')
+          setLoadStage('registry', { status: 'error', count: 0, detail: 'unavailable' })
+          errors.push('registry')
+        }
+
         if (noiseResult.status === 'fulfilled') {
           setNoiseSegments(nextNoiseSegments)
           setLandPenaltyAreas(nextLandPenaltyAreas)
@@ -3187,6 +3351,7 @@ const App = () => {
 
         const hasFreshSource =
           poiResult.status === 'fulfilled' ||
+          registryResult.status === 'fulfilled' ||
           noiseResult.status === 'fulfilled' ||
           (activeCity.id === 'ma-boston' && crimeResult.status === 'fulfilled') ||
           (activeCity.state === 'MA' && trafficResult.status === 'fulfilled')
@@ -3195,11 +3360,13 @@ const App = () => {
           writeZoneSnapshot<MainDataSnapshot>(mainSnapshotKey, {
             pois: nextPois,
             crimeIncidents: nextCrimeIncidents,
+            registryRiskPoints: nextRegistryRiskPoints,
             noiseSegments: nextNoiseSegments,
             landPenaltyAreas: nextLandPenaltyAreas,
             trafficSegments: nextTrafficSegments,
             dataMode: nextDataMode,
             crimeDataMode: nextCrimeDataMode,
+            registryDataMode: nextRegistryDataMode,
           })
         }
 
@@ -3394,6 +3561,7 @@ const App = () => {
       buildSpatialFactorField(
         poisByCategory,
         crimeIncidents,
+        registryRiskPoints,
         noiseSegments,
         landPenaltyAreas,
         trafficSegments,
@@ -3406,6 +3574,7 @@ const App = () => {
       activeCity.bounds,
       deferredCellSizeMeters,
       crimeIncidents,
+      registryRiskPoints,
       landPenaltyAreas,
       noiseSegments,
       poisByCategory,
@@ -3492,6 +3661,8 @@ const App = () => {
       sourceScores.push(crimeDataMode === 'live' ? 1 : 0)
     }
 
+    sourceScores.push(registryDataMode === 'live' ? 1 : 0.5)
+
     return sourceScores.reduce((total, score) => total + score, 0) / sourceScores.length
   }, [
     activeCity.id,
@@ -3499,6 +3670,7 @@ const App = () => {
     dataMode,
     landPenaltyAreas.length,
     noiseSegments.length,
+    registryDataMode,
     trafficSegments.length,
   ])
 
@@ -3561,6 +3733,7 @@ const App = () => {
         suitabilityField,
         poisByCategory,
         crimeIncidents,
+        registryRiskPoints,
         noiseSegments,
         landPenaltyAreas,
         trafficSegments,
@@ -3568,6 +3741,7 @@ const App = () => {
       ),
     [
       crimeIncidents,
+      registryRiskPoints,
       activeCity,
       criteria,
       dataCoverage,
@@ -3603,6 +3777,7 @@ const App = () => {
             suitabilityField,
             poisByCategory,
             crimeIncidents,
+            registryRiskPoints,
             noiseSegments,
             landPenaltyAreas,
             trafficSegments,
@@ -3612,6 +3787,7 @@ const App = () => {
         .sort((a, b) => b.analysis.opportunityScore - a.analysis.opportunityScore),
     [
       crimeIncidents,
+      registryRiskPoints,
       activeCity,
       criteria,
       dataCoverage,
@@ -3656,6 +3832,8 @@ const App = () => {
       sources: {
         osmAmenities: dataMode,
         crime: crimeDataMode,
+        registry: registryDataMode,
+        registryRiskPoints: registryRiskPoints.length,
         noiseSegments: noiseSegments.length,
         landPenaltyAreas: landPenaltyAreas.length,
         trafficSegments: trafficSegments.length,
@@ -3686,6 +3864,8 @@ const App = () => {
     landPenaltyAreas.length,
     neighborhoodScores,
     noiseSegments.length,
+    registryDataMode,
+    registryRiskPoints.length,
     savedSites,
     selectedAnalysis,
     trafficSegments.length,
@@ -4128,12 +4308,16 @@ const App = () => {
                   ? Building2
                   : criterion.id === 'crime'
                     ? ShieldAlert
+                    : criterion.id === 'registry'
+                      ? UserRoundSearch
                     : CATEGORY_META[criterion.id].icon
               const pointCount =
                 criterion.id === 'center'
                   ? 1
                   : criterion.id === 'crime'
                     ? crimeIncidents.length
+                    : criterion.id === 'registry'
+                      ? registryRiskPoints.length
                     : criterion.id === 'noise'
                       ? poisByCategory.noise.length +
                         suitabilityField.noiseSegmentCount +
@@ -4217,6 +4401,8 @@ const App = () => {
             <strong>{dataMode === 'live' ? pois.length : FALLBACK_POIS.length}</strong>
             <span>Криминал</span>
             <strong>{crimeIncidents.length}</strong>
+            <span>Реестр</span>
+            <strong>{registryRiskPoints.length}</strong>
             <span>Шум</span>
             <strong>{noiseSegments.length}</strong>
             <span>Трафик</span>

@@ -20,7 +20,7 @@ export type CityConfig = {
 }
 
 export type PoiCategory = 'parks' | 'groceries' | 'noise' | 'transit'
-export type CriterionId = PoiCategory | 'center' | 'crime'
+export type CriterionId = PoiCategory | 'center' | 'crime' | 'registry'
 
 export type Poi = LatLng & {
   id: string
@@ -36,6 +36,15 @@ export type CrimeIncident = LatLng & {
   id: string
   description: string
   category: string
+}
+
+export type RegistryRiskLevel = 'unknown' | 'low' | 'moderate' | 'high'
+
+export type RegistryRiskPoint = LatLng & {
+  id: string
+  riskLevel: RegistryRiskLevel
+  weight: number
+  source: string
 }
 
 export type NoiseSourceKind = 'road' | 'rail' | 'airport'
@@ -88,9 +97,10 @@ export type BuildingFootprint = LatLng & {
 
 export type DataMode = 'live' | 'sample'
 export type CrimeDataMode = 'live' | 'empty'
+export type RegistryDataMode = 'live' | 'empty'
 export type BuildingDataMode = 'live' | 'empty' | 'loading' | 'partial'
 
-export type LoadStageId = 'osm' | 'crime' | 'noise' | 'traffic' | 'buildings'
+export type LoadStageId = 'osm' | 'crime' | 'registry' | 'noise' | 'traffic' | 'buildings'
 export type LoadStageStatus = 'idle' | 'loading' | 'cached' | 'live' | 'empty' | 'partial' | 'error'
 
 export type LoadStage = {
@@ -103,11 +113,13 @@ export type LoadStage = {
 export type MainDataSnapshot = {
   pois: Poi[]
   crimeIncidents: CrimeIncident[]
+  registryRiskPoints: RegistryRiskPoint[]
   noiseSegments: NoiseSegment[]
   landPenaltyAreas: LandPenaltyArea[]
   trafficSegments: TrafficSegment[]
   dataMode: DataMode
   crimeDataMode: CrimeDataMode
+  registryDataMode: RegistryDataMode
 }
 
 export type BuildingDataSnapshot = {
@@ -244,6 +256,7 @@ export type SuitabilityField = {
   averageScore: number
   evaluatedCellCount: number
   averageCrimeDensity: number
+  averageRegistryDensity: number
   noiseSegmentCount: number
   trafficSegmentCount: number
   landPenaltyAreaCount: number
