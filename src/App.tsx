@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   Layers3,
+  Languages,
   Loader2,
   MapPin,
   PanelLeftClose,
@@ -134,6 +135,13 @@ import type {
 } from './domain/types'
 import 'leaflet/dist/leaflet.css'
 import './App.css'
+
+const isLocalDevRuntime = () =>
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+
+const dataEndpoint = (localProxyPath: string, staticUrl: string) =>
+  new URL(isLocalDevRuntime() ? localProxyPath : staticUrl, window.location.origin)
 
 const CATEGORY_META: Record<
   PoiCategory,
@@ -939,7 +947,10 @@ WHERE "YEAR" = '2026'
   AND "Long" IS NOT NULL
 ORDER BY "OCCURRED_ON_DATE" DESC
 LIMIT 30000`
-  const url = new URL('/api/boston-crime/api/3/action/datastore_search_sql', window.location.origin)
+  const url = dataEndpoint(
+    '/api/boston-crime/api/3/action/datastore_search_sql',
+    'https://data.boston.gov/api/3/action/datastore_search_sql',
+  )
 
   url.searchParams.set('sql', sql)
 
@@ -1003,9 +1014,9 @@ const fetchTrafficSegments = async (signal: AbortSignal, bounds: MapBounds, forc
   const pageSize = 2000
 
   for (let offset = 0; offset < 8000; offset += pageSize) {
-    const url = new URL(
+    const url = dataEndpoint(
       '/api/massdot/arcgis/rest/services/Roads/RoadInventoryLRS/FeatureServer/56/query',
-      window.location.origin,
+      'https://gisstg.massdot.state.ma.us/arcgis/rest/services/Roads/RoadInventoryLRS/FeatureServer/56/query',
     )
 
     url.searchParams.set('f', 'json')
@@ -3067,8 +3078,12 @@ const App = () => {
   const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
+  const [appLanguage, setAppLanguage] = useState<'ru' | 'en'>('ru')
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
   const deferredCriteria = useDeferredValue(criteria)
+  const isEnglish = appLanguage === 'en'
+  const shellTitle = isEnglish ? 'Housing suitability map' : 'Карта пригодности жилья'
+  const languageLabel = isEnglish ? 'EN' : 'RU'
 
   const availableCities = useMemo(
     () => [
@@ -3872,13 +3887,29 @@ const App = () => {
   ])
 
   const mapTopBar = (
-    <div className="map-topbar" aria-label="Поиск и панели">
+    <div className="map-topbar" aria-label={isEnglish ? 'Search and panels' : 'Поиск и панели'}>
       <button
         className="icon-button"
         type="button"
         onClick={() => setIsLeftPanelOpen((current) => !current)}
-        aria-label={isLeftPanelOpen ? 'Скрыть фильтры' : 'Показать фильтры'}
-        title={isLeftPanelOpen ? 'Скрыть фильтры' : 'Показать фильтры'}
+        aria-label={
+          isLeftPanelOpen
+            ? isEnglish
+              ? 'Hide filters'
+              : 'Скрыть фильтры'
+            : isEnglish
+              ? 'Show filters'
+              : 'Показать фильтры'
+        }
+        title={
+          isLeftPanelOpen
+            ? isEnglish
+              ? 'Hide filters'
+              : 'Скрыть фильтры'
+            : isEnglish
+              ? 'Show filters'
+              : 'Показать фильтры'
+        }
       >
         {isLeftPanelOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
       </button>
@@ -3920,13 +3951,14 @@ const App = () => {
           ))}
         </datalist>
         <button
-          className="text-button"
+          className="icon-button"
           disabled={isSearchingCity || citySearchText.trim().length === 0}
           type="button"
           onClick={searchCity}
+          aria-label={isEnglish ? 'Find city' : 'Найти город'}
+          title={isEnglish ? 'Find city' : 'Найти город'}
         >
           {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
-          Найти
         </button>
         <input
           aria-label="ZIP code"
@@ -3942,41 +3974,69 @@ const App = () => {
           }}
         />
         <button
-          className="text-button"
+          className="icon-button"
           disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
           type="button"
           onClick={searchZip}
+          aria-label={isEnglish ? 'Find ZIP code' : 'Найти ZIP'}
+          title={isEnglish ? 'Find ZIP code' : 'Найти ZIP'}
         >
           {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
-          ZIP
         </button>
       </div>
       <button
-        className={`text-button ${isRegionSelectMode ? 'active' : ''}`}
+        className={`icon-button ${isRegionSelectMode ? 'active' : ''}`}
         type="button"
         onClick={() => {
           setDraftRegionBounds(null)
           setIsRegionSelectMode((current) => !current)
         }}
+        aria-label={isEnglish ? 'Select region' : 'Выделить регион'}
+        title={isEnglish ? 'Select region' : 'Выделить регион'}
       >
         <Target size={15} />
-        Регион
       </button>
       <button
         className="icon-button"
         type="button"
         onClick={refreshData}
-        aria-label="Обновить данные"
-        title="Обновить данные"
+        aria-label={isEnglish ? 'Refresh data' : 'Обновить данные'}
+        title={isEnglish ? 'Refresh data' : 'Обновить данные'}
       >
         {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
+      </button>
+      <button
+        className="language-toggle"
+        type="button"
+        onClick={() => setAppLanguage((current) => (current === 'ru' ? 'en' : 'ru'))}
+        aria-label={isEnglish ? 'Switch to Russian' : 'Switch to English'}
+        title={isEnglish ? 'Switch to Russian' : 'Switch to English'}
+      >
+        <Languages size={15} />
+        {languageLabel}
       </button>
       <button
         className="icon-button"
         type="button"
         onClick={() => setIsInspectorOpen((current) => !current)}
-        aria-label={isInspectorOpen ? 'Скрыть инспектор' : 'Показать инспектор'}
-        title={isInspectorOpen ? 'Скрыть инспектор' : 'Показать инспектор'}
+        aria-label={
+          isInspectorOpen
+            ? isEnglish
+              ? 'Hide inspector'
+              : 'Скрыть инспектор'
+            : isEnglish
+              ? 'Show inspector'
+              : 'Показать инспектор'
+        }
+        title={
+          isInspectorOpen
+            ? isEnglish
+              ? 'Hide inspector'
+              : 'Скрыть инспектор'
+            : isEnglish
+              ? 'Show inspector'
+              : 'Показать инспектор'
+        }
       >
         {isInspectorOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
       </button>
@@ -4114,11 +4174,11 @@ const App = () => {
         isInspectorOpen ? '' : 'right-collapsed'
       }`}
     >
-      <aside className="control-panel" aria-label="Настройки карты">
+      <aside className="control-panel" aria-label={isEnglish ? 'Map settings' : 'Настройки карты'}>
         <header className="panel-header">
           <div>
             <p className="eyebrow">{activeCity.state}</p>
-            <h1>Карта пригодности жилья</h1>
+            <h1>{shellTitle}</h1>
           </div>
         </header>
 
@@ -4444,6 +4504,13 @@ const App = () => {
 
       <main className="map-stage">
         {mapTopBar}
+        {overlayIsResolving ? (
+          <div className="map-loading-pulse" aria-live="polite">
+            <span />
+            <strong>{loadingHeadline}</strong>
+            <em>{loadProgress}%</em>
+          </div>
+        ) : null}
         <MapContainer
           attributionControl={false}
           bounds={[

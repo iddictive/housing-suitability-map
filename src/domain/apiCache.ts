@@ -4,6 +4,14 @@ import type { CityConfig, MapBounds, OverpassElement } from './types'
 const memoryApiCache = new Map<string, unknown>()
 let overpassRequestQueue = Promise.resolve()
 
+const OVERPASS_ENDPOINTS = [
+  'https://overpass.osm.ch/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+]
+
+const OVERPASS_TIMEOUT_MS = 18_000
+
 const apiCacheKey = (key: string) => `${API_CACHE_VERSION}:${key}`
 
 export const boundsCachePart = (bounds: MapBounds) =>
@@ -130,6 +138,33 @@ const wait = (milliseconds: number) =>
     globalThis.setTimeout(resolve, milliseconds)
   })
 
+const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+  timeoutMs: number,
+) => {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs)
+
+  if (signal.aborted) {
+    controller.abort()
+  } else {
+    signal.addEventListener('abort', abort, { once: true })
+  }
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    globalThis.clearTimeout(timeout)
+    signal.removeEventListener('abort', abort)
+  }
+}
+
 export const fetchOverpassJson = async (
   body: string,
   signal: AbortSignal,
@@ -138,20 +173,39 @@ export const fetchOverpassJson = async (
   const run = async () => {
     await wait(850)
 
-    const response = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=UTF-8',
-      },
-      body,
-      signal,
-    })
+    let lastError: unknown = null
 
-    if (!response.ok) {
-      throw new Error(`Overpass ${label} ${response.status}`)
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      try {
+        const response = await fetchWithTimeout(
+          endpoint,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'text/plain;charset=UTF-8',
+            },
+            body,
+          },
+          signal,
+          OVERPASS_TIMEOUT_MS,
+        )
+
+        if (!response.ok) {
+          throw new Error(`Overpass ${label} ${response.status}`)
+        }
+
+        return (await response.json()) as { elements?: OverpassElement[] }
+      } catch (error) {
+        if (signal.aborted) {
+          throw error
+        }
+
+        lastError = error
+        await wait(300)
+      }
     }
 
-    return (await response.json()) as { elements?: OverpassElement[] }
+    throw lastError instanceof Error ? lastError : new Error(`Overpass ${label} unavailable`)
   }
   const result = overpassRequestQueue.then(run, run)
 

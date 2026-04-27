@@ -81,7 +81,7 @@ export const fetchRegistryRiskPoints = async (
   cachedRequest<RegistryRiskPoint[]>(
     `registry-risk:${boundsCachePart(bounds)}`,
     async () => {
-      const response = await fetch('/registry-risk.json', { signal })
+      const response = await fetch(`${import.meta.env.BASE_URL}registry-risk.json`, { signal })
 
       if (response.status === 404) {
         return []

@@ -1,73 +1,41 @@
-# React + TypeScript + Vite
+# Housing Suitability Map / Карта пригодности жилья
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Interactive map for comparing residential suitability across US cities and selected regions. The app combines amenities, parks, transit, roads, traffic, noise, crime, building data, and hard land-use exclusions into a smooth suitability overlay.
 
-Currently, two official plugins are available:
+Интерактивная карта для оценки пригодности жилья по городам и выделенным регионам США. Приложение учитывает удобства, парки, транспорт, дороги, трафик, шум, криминал, этажность зданий и жесткие исключения по земле в едином плавном оверлее.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Live demo: https://iddictive.github.io/housing-suitability-map/
 
-## React Compiler
+## Features / Возможности
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Smooth suitability overlay with shared score palette and inspector context.
+- Hard exclusions for water, parks, roads, bridges, airports, and clearly non-residential land.
+- Search by state, city, ZIP code, and custom selected region.
+- Progressive loading states with local caching and fallback data.
+- Adjustable grid resolution and scoring profiles.
+- Point inspector with score, risk, confidence, sources, and pinned locations.
 
-## Expanding the ESLint configuration
+## Development / Разработка
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Production build:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+GitHub Pages build:
+
+```bash
+GITHUB_PAGES=true npm run build
+```
+
+## Data Notes / Данные
+
+The app uses public geospatial sources and local sanitized fallback datasets. Private personal records are not stored in the repository.
+
+Приложение использует публичные геоданные и локальные очищенные fallback-наборы. Персональные записи не хранятся в репозитории.
