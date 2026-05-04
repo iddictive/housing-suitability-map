@@ -76,18 +76,23 @@ import {
 import {
   approximatePolygonAreaSqm,
   boundsToBbox,
-  centerForBounds,
   clamp,
   fieldBounds,
-  genericCityCheckpoints,
   latLngToMeters,
-  limitBoundsAroundCenter,
   metersPerDegreeLngForBounds,
   nearestMeters,
   normalizeBounds,
   pointInPolygon,
   pointToSegmentDistanceMeters,
 } from './domain/geo'
+import {
+  buildRegionCityConfig,
+  fetchCityConfig,
+  fetchZipConfig,
+  isUsZipCode,
+  slugifyFilePart,
+  titleCasePlaceName,
+} from './domain/location'
 import { fetchRegistryRiskPoints, registryRiskScoreAtPoint } from './domain/registryRisk'
 import type {
   Bounds as LeafletBounds,
@@ -163,24 +168,6 @@ const parkStrengthFromArea = (areaSqm = 0) => {
   return clamp((edgeEquivalent - 40) / 320, 0.05, 1)
 }
 
-const isUsZipCode = (value: string) => /^\d{5}(?:-\d{4})?$/.test(value.trim())
-
-const titleCasePlaceName = (value: string) =>
-  value
-    .trim()
-    .split(/\s+/)
-    .map((word) => {
-      if (/^[A-Z]{2,}$/.test(word) || /^\d/.test(word)) {
-        return word
-      }
-
-      return word
-        .split('-')
-        .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part))
-        .join('-')
-    })
-    .join(' ')
-
 const formatBoundsSummary = (bounds: MapBounds) => {
   const latSpanKm = (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT / 1000
   const lngSpanKm = (bounds.east - bounds.west) * metersPerDegreeLngForBounds(bounds) / 1000
@@ -188,159 +175,11 @@ const formatBoundsSummary = (bounds: MapBounds) => {
   return `${latSpanKm.toFixed(1)} x ${lngSpanKm.toFixed(1)} км`
 }
 
-const slugifyFilePart = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'region'
-
-type NominatimPlace = {
-  lat: string
-  lon: string
-  display_name: string
-  addresstype?: string
-  type?: string
-  address?: Record<string, string | undefined>
-  boundingbox?: [string, string, string, string]
-}
-
 type ResidentialEvidenceField = {
   overlayInclusionMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
   hasResidentialEvidence: boolean
   isProvisionalEligibility: boolean
-}
-
-const isCityLevelPlace = (place: NominatimPlace) => {
-  const address = place.address ?? {}
-  const hasLocality = Boolean(
-    address.city ||
-      address.town ||
-      address.village ||
-      address.municipality ||
-      address.borough ||
-      address.township ||
-      address.hamlet,
-  )
-
-  if (hasLocality) {
-    return true
-  }
-
-  return ['city', 'town', 'village', 'municipality', 'borough', 'township', 'hamlet'].includes(
-    place.addresstype ?? '',
-  )
-}
-
-const cityConfigFromNominatimPlace = (
-  place: NominatimPlace,
-  stateCode: string,
-  label: string,
-  idPrefix: string,
-): CityConfig => {
-  const lat = Number(place.lat)
-  const lng = Number(place.lon)
-  const [southRaw, northRaw, westRaw, eastRaw] = place.boundingbox ?? []
-  const bounds = {
-    south: Number(southRaw),
-    north: Number(northRaw),
-    west: Number(westRaw),
-    east: Number(eastRaw),
-  }
-  const fallbackBounds = {
-    south: lat - 0.025,
-    north: lat + 0.025,
-    west: lng - 0.035,
-    east: lng + 0.035,
-  }
-  const center = { lat, lng }
-  const safeBounds = limitBoundsAroundCenter(
-    Object.values(bounds).every(Number.isFinite) ? bounds : fallbackBounds,
-    center,
-  )
-
-  return {
-    id: `${idPrefix}-${stateCode}-${slugifyFilePart(label)}`,
-    state: stateCode,
-    city: label,
-    bounds: safeBounds,
-    center,
-    checkpoints: genericCityCheckpoints(label, safeBounds, center),
-  }
-}
-
-const fetchCityConfig = async (stateCode: string, cityName: string): Promise<CityConfig> => {
-  const state = US_STATES.find((item) => item.code === stateCode)
-  const city = titleCasePlaceName(cityName)
-
-  if (!state || city.length === 0) {
-    throw new Error('city required')
-  }
-
-  if ([state.name.toLowerCase(), state.code.toLowerCase()].includes(city.toLowerCase())) {
-    throw new Error('city required')
-  }
-
-  const searchParams = new URLSearchParams({
-    format: 'jsonv2',
-    limit: '1',
-    countrycodes: 'us',
-    addressdetails: '1',
-    q: `${city}, ${state.name}, USA`,
-  })
-  const cacheKey = `geocode:${stateCode}:${city.toLowerCase()}`
-  const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
-
-    if (!response.ok) {
-      throw new Error(`Nominatim ${response.status}`)
-    }
-
-    return (await response.json()) as NominatimPlace[]
-  })
-  const place = places.find(isCityLevelPlace)
-
-  if (!place) {
-    throw new Error('city not found')
-  }
-
-  return cityConfigFromNominatimPlace(place, stateCode, city, 'custom')
-}
-
-const fetchZipConfig = async (stateCode: string, zipCode: string): Promise<CityConfig> => {
-  const state = US_STATES.find((item) => item.code === stateCode)
-  const normalizedZip = zipCode.trim()
-
-  if (!state || !isUsZipCode(normalizedZip)) {
-    throw new Error('zip required')
-  }
-
-  const searchParams = new URLSearchParams({
-    format: 'jsonv2',
-    limit: '1',
-    countrycodes: 'us',
-    addressdetails: '1',
-    postalcode: normalizedZip,
-    state: state.name,
-  })
-  const cacheKey = `zip:${stateCode}:${normalizedZip.toLowerCase()}`
-  const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
-
-    if (!response.ok) {
-      throw new Error(`Nominatim ${response.status}`)
-    }
-
-    return (await response.json()) as NominatimPlace[]
-  })
-  const place = places[0]
-
-  if (!place) {
-    throw new Error('zip not found')
-  }
-
-  return cityConfigFromNominatimPlace(place, stateCode, `ZIP ${normalizedZip}`, 'zip')
 }
 
 const buildOverpassQuery = (bounds: MapBounds) => {
@@ -3034,7 +2873,7 @@ const PointCompletenessPanel = ({
 
 const App = () => {
   const [selectedState, setSelectedState] = useState('MA')
-  const [selectedCityId, setSelectedCityId] = useState('ma-boston')
+  const [activeCity, setActiveCity] = useState<CityConfig>(CITY_OPTIONS[0])
   const [customCity, setCustomCity] = useState<CityConfig | null>(null)
   const [citySearchText, setCitySearchText] = useState('Boston')
   const [zipSearchText, setZipSearchText] = useState('')
@@ -3092,14 +2931,6 @@ const App = () => {
     ],
     [customCity, selectedState],
   )
-  const activeCity = useMemo(
-    () =>
-      CITY_OPTIONS.find((option) => option.id === selectedCityId && option.state === selectedState) ??
-      (customCity?.id === selectedCityId && customCity.state === selectedState ? customCity : null) ??
-      availableCities[0] ??
-      CITY_OPTIONS[0],
-    [availableCities, customCity, selectedCityId, selectedState],
-  )
   const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
   const activeZoneCacheKey = useMemo(
     () => `${activeCity.id}:${boundsCachePart(activeCity.bounds)}`,
@@ -3124,11 +2955,11 @@ const App = () => {
     }))
   }, [])
 
-  const activateCustomCity = useCallback((city: CityConfig) => {
+  const activateLocation = useCallback((city: CityConfig, syncSearchText = true) => {
     setCustomCity(city)
-    setSelectedCityId(city.id)
+    setActiveCity(city)
     setSelectedPoint(city.center)
-    if (!city.id.startsWith('region-')) {
+    if (syncSearchText) {
       setCitySearchText(city.city)
     }
     setSavedSites([])
@@ -3138,25 +2969,13 @@ const App = () => {
 
   const applyRegionBounds = useCallback(
     (bounds: MapBounds) => {
-      const center = centerForBounds(bounds)
-      const baseLabel = activeCity.city.startsWith('Регион ')
-        ? activeCity.city.replace(/^Регион\s+/, '')
-        : activeCity.city
-      const label = `Регион ${titleCasePlaceName(baseLabel)}`
-      const regionCity: CityConfig = {
-        id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
-        state: activeCity.state,
-        city: label,
-        bounds,
-        center,
-        checkpoints: genericCityCheckpoints(label, bounds, center),
-      }
+      const regionCity = buildRegionCityConfig(activeCity, bounds)
 
       setSelectedRegionBounds(bounds)
       setIsRegionSelectMode(false)
-      activateCustomCity(regionCity)
+      activateLocation(regionCity, false)
     },
-    [activeCity, activateCustomCity],
+    [activeCity, activateLocation],
   )
 
   useEffect(() => {
@@ -3214,6 +3033,15 @@ const App = () => {
       }
 
       setIsLoading(true)
+      setPois(activeCity.id === 'ma-boston' ? FALLBACK_POIS : [])
+      setCrimeIncidents([])
+      setRegistryRiskPoints([])
+      setNoiseSegments([])
+      setLandPenaltyAreas([])
+      setTrafficSegments([])
+      setDataMode('sample')
+      setCrimeDataMode('empty')
+      setRegistryDataMode('empty')
       setLoadStage('osm', { status: 'loading', count: undefined, detail: 'amenities + parks' })
       setLoadStage('crime', {
         status: activeCity.id === 'ma-boston' ? 'loading' : 'empty',
@@ -3533,7 +3361,9 @@ const App = () => {
     fetchCityConfig(selectedState, citySearchText)
       .then((city) => {
         setSelectedRegionBounds(null)
-        activateCustomCity(city)
+        setDraftRegionBounds(null)
+        setIsRegionSelectMode(false)
+        activateLocation(city)
       })
       .catch(() => {
         setError('Город не найден')
@@ -3541,7 +3371,7 @@ const App = () => {
       .finally(() => {
         setIsSearchingCity(false)
       })
-  }, [activateCustomCity, citySearchText, selectedState])
+  }, [activateLocation, citySearchText, selectedState])
 
   const searchZip = useCallback(() => {
     setIsSearchingZip(true)
@@ -3550,7 +3380,9 @@ const App = () => {
     fetchZipConfig(selectedState, zipSearchText)
       .then((city) => {
         setSelectedRegionBounds(null)
-        activateCustomCity(city)
+        setDraftRegionBounds(null)
+        setIsRegionSelectMode(false)
+        activateLocation(city)
       })
       .catch(() => {
         setError('ZIP не найден')
@@ -3558,7 +3390,7 @@ const App = () => {
       .finally(() => {
         setIsSearchingZip(false)
       })
-  }, [activateCustomCity, selectedState, zipSearchText])
+  }, [activateLocation, selectedState, zipSearchText])
 
   const poisByCategory = useMemo(
     () =>
@@ -3922,7 +3754,6 @@ const App = () => {
             const nextState = event.target.value
 
             setSelectedState(nextState)
-            setSelectedRegionBounds(null)
             setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
           }}
         >
