@@ -174,6 +174,7 @@ export const fetchOverpassJson = async (
     await wait(850)
 
     let lastError: unknown = null
+    let lastPayload: { elements?: OverpassElement[] } | null = null
 
     for (const endpoint of OVERPASS_ENDPOINTS) {
       try {
@@ -194,7 +195,15 @@ export const fetchOverpassJson = async (
           throw new Error(`Overpass ${label} ${response.status}`)
         }
 
-        return (await response.json()) as { elements?: OverpassElement[] }
+        const payload = (await response.json()) as { elements?: OverpassElement[] }
+        lastPayload = payload
+
+        if ((payload.elements ?? []).length === 0) {
+          await wait(300)
+          continue
+        }
+
+        return payload
       } catch (error) {
         if (signal.aborted) {
           throw error
@@ -203,6 +212,10 @@ export const fetchOverpassJson = async (
         lastError = error
         await wait(300)
       }
+    }
+
+    if (lastPayload) {
+      return lastPayload
     }
 
     throw lastError instanceof Error ? lastError : new Error(`Overpass ${label} unavailable`)
