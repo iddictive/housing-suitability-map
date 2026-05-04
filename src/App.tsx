@@ -151,10 +151,10 @@ const CATEGORY_META: Record<
     icon: typeof TreePine
   }
 > = {
-  parks: { label: 'Парки', color: '#238b45', icon: TreePine },
-  groceries: { label: 'Магазины', color: '#1d70b8', icon: ShoppingBasket },
-  noise: { label: 'Шум', color: '#bd3b21', icon: Volume2 },
-  transit: { label: 'Транспорт', color: '#635bff', icon: TrainFront },
+  parks: { label: 'Parks', color: '#238b45', icon: TreePine },
+  groceries: { label: 'Groceries', color: '#1d70b8', icon: ShoppingBasket },
+  noise: { label: 'Noise', color: '#bd3b21', icon: Volume2 },
+  transit: { label: 'Transit', color: '#635bff', icon: TrainFront },
 }
 
 const parkStrengthFromArea = (areaSqm = 0) => {
@@ -185,7 +185,7 @@ const formatBoundsSummary = (bounds: MapBounds) => {
   const latSpanKm = (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT / 1000
   const lngSpanKm = (bounds.east - bounds.west) * metersPerDegreeLngForBounds(bounds) / 1000
 
-  return `${latSpanKm.toFixed(1)} x ${lngSpanKm.toFixed(1)} км`
+  return `${latSpanKm.toFixed(1)} x ${lngSpanKm.toFixed(1)} km`
 }
 
 const slugifyFilePart = (value: string) =>
@@ -2068,23 +2068,23 @@ const labelForScore = (score: number) => {
 
 const formatMeters = (meters: number) => {
   if (!Number.isFinite(meters)) {
-    return 'нет данных'
+    return 'no data'
   }
 
-  return meters < 1000 ? `${Math.round(meters)} м` : `${(meters / 1000).toFixed(1)} км`
+  return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`
 }
 
 const loadStatusText = (stage: LoadStage) => {
   if (stage.status === 'loading') {
-    return 'загрузка'
+    return 'loading'
   }
 
   if (stage.status === 'cached') {
-    return stage.count === undefined ? 'кеш' : `кеш ${stage.count}`
+    return stage.count === undefined ? 'cached' : `cached ${stage.count}`
   }
 
   if (stage.status === 'live') {
-    return stage.count === undefined ? 'готово' : String(stage.count)
+    return stage.count === undefined ? 'ready' : String(stage.count)
   }
 
   if (stage.status === 'partial') {
@@ -2093,21 +2093,21 @@ const loadStatusText = (stage: LoadStage) => {
 
   if (stage.status === 'empty') {
     if (stage.detail === 'unsupported') {
-      return 'н/д'
+      return 'n/a'
     }
 
     if (stage.detail === 'Boston only') {
-      return 'только Бостон'
+      return 'Boston only'
     }
 
-    return 'нет'
+    return 'none'
   }
 
   if (stage.status === 'error') {
-    return 'ошибка'
+    return 'error'
   }
 
-  return 'ожидание'
+  return 'pending'
 }
 
 const nearestPoiDetail = (
@@ -2315,91 +2315,91 @@ const analyzePoint = (
         : 0.86
       : Math.min(landCap, 0.42)
   const pointLandStatus = isWater
-    ? 'вода'
+    ? 'water'
     : isRoad
-      ? 'дорога'
+      ? 'road'
       : isNoGo
-        ? 'нежилая/no-go'
+        ? 'non-residential/no-go'
         : hasOverlayExclusion || isAreaExcluded
-          ? 'исключена'
+          ? 'excluded'
           : hasResidentialEvidence
-            ? 'жилой сигнал'
+            ? 'residential signal'
             : hasOverlayInclusion
-              ? 'земля без жилого сигнала'
-              : 'нет land mask'
+              ? 'land without residential signal'
+              : 'no land mask'
   const landDetail = isRoad
-    ? 'дорога / не жилье'
+    ? 'road / non-residential'
     : landCap === 0
-      ? 'вода/не жилье'
+      ? 'water / non-residential'
       : landCap < 1
-        ? 'OSM cap: не жилая зона'
-        : 'OSM cap не найден'
+        ? 'OSM cap: non-residential zone'
+        : 'OSM cap not found'
   const factors: FactorBreakdown[] = [
     {
       id: 'parks',
-      label: 'Парки',
+      label: 'Parks',
       score: parkScore,
-      detail: `${nearestPark.poi?.name ?? 'Парк'} · ${formatMeters(nearestPark.distance)}`,
+      detail: `${nearestPark.poi?.name ?? 'Park'} · ${formatMeters(nearestPark.distance)}`,
     },
     {
       id: 'groceries',
-      label: 'Магазины',
+      label: 'Groceries',
       score: groceryScore,
-      detail: `${nearestGrocery.poi?.name ?? 'Магазин'} · ${formatMeters(nearestGrocery.distance)}, ${grocerySupply.nearbyCount} рядом`,
+      detail: `${nearestGrocery.poi?.name ?? 'Store'} · ${formatMeters(nearestGrocery.distance)}, ${grocerySupply.nearbyCount} nearby`,
       summary:
         grocerySupply.nearbyCount >= 5
-          ? `${grocerySupply.nearbyCount} магазинов рядом`
-          : `${grocerySupply.nearbyCount} рядом · ${formatMeters(nearestGrocery.distance)}`,
+          ? `${grocerySupply.nearbyCount} stores nearby`
+          : `${grocerySupply.nearbyCount} nearby · ${formatMeters(nearestGrocery.distance)}`,
     },
     {
       id: 'noise',
-      label: 'Шум',
+      label: 'Noise',
       score: noiseScore,
-      detail: `транспорт ${formatMeters(nearestTransport)}, nightlife ${formatMeters(nearestNightlife.distance)}`,
-      summary: `транспорт ${formatMeters(nearestTransport)}`,
+      detail: `traffic ${formatMeters(nearestTransport)}, nightlife ${formatMeters(nearestNightlife.distance)}`,
+      summary: `traffic ${formatMeters(nearestTransport)}`,
     },
     {
       id: 'transit',
-      label: 'Транспорт',
+      label: 'Transit',
       score: transitScore,
-      detail: `${nearestTransit.poi?.name ?? 'Станция'} · ${formatMeters(nearestTransit.distance)}`,
+      detail: `${nearestTransit.poi?.name ?? 'Station'} · ${formatMeters(nearestTransit.distance)}`,
       summary: formatMeters(nearestTransit.distance),
     },
     {
       id: 'center',
-      label: 'Центр',
+      label: 'Center',
       score: centerScore,
       detail: `${formatMeters(Math.hypot(meters.x - cityCenter.x, meters.y - cityCenter.y))}`,
     },
     {
       id: 'crime',
-      label: 'Криминал',
+      label: 'Crime',
       score: crimeScore,
       detail:
         crimeIncidents.length === 0
-          ? 'нет live данных'
+          ? 'no live data'
           : crimeScore >= 0.65
-            ? 'ниже среднего фона'
+            ? 'below baseline'
             : crimeScore >= 0.4
-              ? 'около среднего'
-              : 'выше среднего',
+              ? 'near baseline'
+              : 'above baseline',
     },
     {
       id: 'registry',
-      label: 'Реестр',
+      label: 'Registry',
       score: registryScore,
       detail:
         registryRiskPoints.length === 0
-          ? 'нет данных'
+          ? 'no data'
           : registryScore >= 0.65
-            ? 'низкий фон'
+            ? 'low baseline'
             : registryScore >= 0.4
-              ? 'умеренный фон'
-              : 'повышенный фон',
+              ? 'moderate baseline'
+              : 'elevated baseline',
     },
     {
       id: 'land',
-      label: 'Земля',
+      label: 'Land',
       score: landFactorScore,
       detail: landDetail,
       summary: pointLandStatus,
@@ -2420,35 +2420,35 @@ const analyzePoint = (
   const adjustedConfidence = Math.min(confidence, clamp(0.42 + landConfidence * 0.58))
   const dataCompleteness: PointDataItem[] = [
     {
-      label: 'Земля',
+      label: 'Land',
       value: pointLandStatus,
       tone: isWater || isRoad || isNoGo || hasOverlayExclusion ? 'bad' : hasResidentialEvidence ? 'good' : 'warn',
     },
     {
-      label: 'Жилой сигнал',
-      value: hasResidentialEvidence ? 'есть' : 'не найден',
+      label: 'Residential signal',
+      value: hasResidentialEvidence ? 'present' : 'not found',
       tone: hasResidentialEvidence ? 'good' : 'warn',
     },
     {
-      label: 'Криминал',
-      value: crimeIncidents.length > 0 ? `радиус ${CRIME_RADIUS_METERS} м` : 'нет live данных',
+      label: 'Crime',
+      value: crimeIncidents.length > 0 ? `radius ${CRIME_RADIUS_METERS} m` : 'no live data',
       tone: crimeIncidents.length > 0 ? 'good' : 'bad',
     },
     {
-      label: 'Реестр',
-      value: registryRiskPoints.length > 0 ? `радиус ${REGISTRY_RISK_RADIUS_METERS} м` : 'нет данных',
+      label: 'Registry',
+      value: registryRiskPoints.length > 0 ? `radius ${REGISTRY_RISK_RADIUS_METERS} m` : 'no data',
       tone: registryRiskPoints.length > 0 ? 'warn' : 'neutral',
     },
     {
-      label: 'Шум',
+      label: 'Noise',
       value:
         noiseSegments.length > 0 || poisByCategory.noise.length > 0
-          ? `транспорт ${formatMeters(nearestTransport)}`
-          : 'нет источников',
+          ? `traffic ${formatMeters(nearestTransport)}`
+          : 'no sources',
       tone: noiseSegments.length > 0 || poisByCategory.noise.length > 0 ? 'good' : 'warn',
     },
     {
-      label: 'Удобства',
+      label: 'Amenities',
       value: `${poisByCategory.parks.length}/${poisByCategory.groceries.length}/${poisByCategory.transit.length}`,
       tone:
         poisByCategory.parks.length > 0 &&
@@ -2460,10 +2460,10 @@ const analyzePoint = (
   ]
   const thesis =
     score >= 0.62 && riskScore < 0.45
-      ? 'Кандидат для shortlist: сильная пригодность без критического риска.'
+      ? 'Shortlist candidate: strong suitability without critical risk.'
       : riskScore >= 0.65
-        ? 'Требует осторожности: риск/шум доминирует над удобствами.'
-        : 'Пограничная зона: нужна проверка на уровне объекта и улицы.'
+        ? 'Needs caution: risk or noise dominates amenities.'
+        : 'Borderline area: check the exact property and street context.'
 
   return {
     point,
@@ -2974,15 +2974,15 @@ const PointCompletenessPanel = ({
   compact?: boolean
 }) => {
   const buildingItem: PointDataItem = {
-    label: 'Здание',
+    label: 'Building',
     value:
       buildingDataMode === 'loading'
-        ? 'загрузка'
+        ? 'loading'
         : building
-          ? `${building.levels ?? '?'} эт. · ${formatMeters(buildingDistance)}`
+          ? `${building.levels ?? '?'} fl. · ${formatMeters(buildingDistance)}`
           : buildingDataMode === 'partial'
-            ? 'не найдено в partial'
-            : 'не найдено',
+            ? 'not found in partial data'
+            : 'not found',
     tone:
       buildingDataMode === 'loading'
         ? 'neutral'
@@ -2996,7 +2996,7 @@ const PointCompletenessPanel = ({
   const crimeItem: PointDataItem =
     city.id === 'ma-boston'
       ? analysis.dataCompleteness[2]
-      : { label: 'Криминал', value: 'только Бостон', tone: 'neutral' }
+      : { label: 'Crime', value: 'Boston only', tone: 'neutral' }
   const compactItems = [
     landItem,
     analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
@@ -3078,11 +3078,11 @@ const App = () => {
   const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
-  const [appLanguage, setAppLanguage] = useState<'ru' | 'en'>('ru')
+  const [appLanguage, setAppLanguage] = useState<'ru' | 'en'>('en')
   const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
   const deferredCriteria = useDeferredValue(criteria)
   const isEnglish = appLanguage === 'en'
-  const shellTitle = isEnglish ? 'Housing suitability map' : 'Карта пригодности жилья'
+  const shellTitle = isEnglish ? 'Housing suitability map' : 'Housing suitability map'
   const languageLabel = isEnglish ? 'EN' : 'RU'
 
   const availableCities = useMemo(
@@ -3139,10 +3139,10 @@ const App = () => {
   const applyRegionBounds = useCallback(
     (bounds: MapBounds) => {
       const center = centerForBounds(bounds)
-      const baseLabel = activeCity.city.startsWith('Регион ')
-        ? activeCity.city.replace(/^Регион\s+/, '')
+      const baseLabel = activeCity.city.startsWith('Region ')
+        ? activeCity.city.replace(/^Region\s+/, '')
         : activeCity.city
-      const label = `Регион ${titleCasePlaceName(baseLabel)}`
+      const label = `Region ${titleCasePlaceName(baseLabel)}`
       const regionCity: CityConfig = {
         id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
         state: activeCity.state,
@@ -3453,11 +3453,8 @@ const App = () => {
           return
         }
 
-        const nextMode: Exclude<BuildingDataMode, 'loading'> = result.isCapped
-          ? 'partial'
-          : result.buildings.length > 0
-            ? 'live'
-            : 'empty'
+        const nextMode: Exclude<BuildingDataMode, 'loading'> =
+          result.buildings.length > 0 ? 'live' : 'empty'
 
         setBuildingFootprints(result.buildings)
         setBuildingDataMode(nextMode)
@@ -3536,7 +3533,7 @@ const App = () => {
         activateCustomCity(city)
       })
       .catch(() => {
-        setError('Город не найден')
+        setError('City not found')
       })
       .finally(() => {
         setIsSearchingCity(false)
@@ -3553,7 +3550,7 @@ const App = () => {
         activateCustomCity(city)
       })
       .catch(() => {
-        setError('ZIP не найден')
+        setError('ZIP not found')
       })
       .finally(() => {
         setIsSearchingZip(false)
@@ -3719,18 +3716,18 @@ const App = () => {
     const loadingStage = Object.values(loadStages).find((stage) => stage.status === 'loading')
 
     if (loadingStage) {
-      return `${loadingStage.label}: загрузка`
+      return `${loadingStage.label}: loading`
     }
 
     if (Object.values(loadStages).some((stage) => stage.status === 'error')) {
-      return 'Загрузка завершена с пропусками'
+      return 'Loaded with gaps'
     }
 
     if (Object.values(loadStages).some((stage) => stage.status === 'partial')) {
-      return 'Загрузка завершена частично'
+      return 'Partially loaded'
     }
 
-    return 'Данные готовы'
+    return 'Data ready'
   }, [loadStages])
 
   const overlayIsResolving =
@@ -3820,7 +3817,7 @@ const App = () => {
       const nextSite: SavedSite = {
         ...selectedAnalysis,
         id: selectedSiteId,
-        name: `Точка ${currentSites.length + 1}`,
+        name: `Point ${currentSites.length + 1}`,
       }
 
       if (currentSites.some((site) => site.id === nextSite.id)) {
@@ -3887,7 +3884,7 @@ const App = () => {
   ])
 
   const mapTopBar = (
-    <div className="map-topbar" aria-label={isEnglish ? 'Search and panels' : 'Поиск и панели'}>
+    <div className="map-topbar" aria-label="Search and panels">
       <button
         className="icon-button"
         type="button"
@@ -3896,19 +3893,19 @@ const App = () => {
           isLeftPanelOpen
             ? isEnglish
               ? 'Hide filters'
-              : 'Скрыть фильтры'
+              : 'Hide filters'
             : isEnglish
               ? 'Show filters'
-              : 'Показать фильтры'
+              : 'Show filters'
         }
         title={
           isLeftPanelOpen
             ? isEnglish
               ? 'Hide filters'
-              : 'Скрыть фильтры'
+              : 'Hide filters'
             : isEnglish
               ? 'Show filters'
-              : 'Показать фильтры'
+              : 'Show filters'
         }
       >
         {isLeftPanelOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
@@ -3916,7 +3913,7 @@ const App = () => {
       <div className="map-search">
         <Search size={16} />
         <select
-          aria-label="Штат"
+          aria-label="State"
           value={selectedState}
           onChange={(event) => {
             const nextState = event.target.value
@@ -3933,7 +3930,7 @@ const App = () => {
           ))}
         </select>
         <input
-          aria-label="Город или район"
+          aria-label="City or area"
           list="major-city-options"
           placeholder={activeCityLabel}
           type="text"
@@ -3955,8 +3952,8 @@ const App = () => {
           disabled={isSearchingCity || citySearchText.trim().length === 0}
           type="button"
           onClick={searchCity}
-          aria-label={isEnglish ? 'Find city' : 'Найти город'}
-          title={isEnglish ? 'Find city' : 'Найти город'}
+          aria-label={isEnglish ? 'Find city' : 'Find city'}
+          title={isEnglish ? 'Find city' : 'Find city'}
         >
           {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
         </button>
@@ -3978,8 +3975,8 @@ const App = () => {
           disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
           type="button"
           onClick={searchZip}
-          aria-label={isEnglish ? 'Find ZIP code' : 'Найти ZIP'}
-          title={isEnglish ? 'Find ZIP code' : 'Найти ZIP'}
+          aria-label={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
+          title={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
         >
           {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
         </button>
@@ -3991,8 +3988,8 @@ const App = () => {
           setDraftRegionBounds(null)
           setIsRegionSelectMode((current) => !current)
         }}
-        aria-label={isEnglish ? 'Select region' : 'Выделить регион'}
-        title={isEnglish ? 'Select region' : 'Выделить регион'}
+        aria-label={isEnglish ? 'Select region' : 'Select region'}
+        title={isEnglish ? 'Select region' : 'Select region'}
       >
         <Target size={15} />
       </button>
@@ -4000,8 +3997,8 @@ const App = () => {
         className="icon-button"
         type="button"
         onClick={refreshData}
-        aria-label={isEnglish ? 'Refresh data' : 'Обновить данные'}
-        title={isEnglish ? 'Refresh data' : 'Обновить данные'}
+        aria-label={isEnglish ? 'Refresh data' : 'Refresh data'}
+        title={isEnglish ? 'Refresh data' : 'Refresh data'}
       >
         {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
       </button>
@@ -4023,19 +4020,19 @@ const App = () => {
           isInspectorOpen
             ? isEnglish
               ? 'Hide inspector'
-              : 'Скрыть инспектор'
+              : 'Hide inspector'
             : isEnglish
               ? 'Show inspector'
-              : 'Показать инспектор'
+              : 'Show inspector'
         }
         title={
           isInspectorOpen
             ? isEnglish
               ? 'Hide inspector'
-              : 'Скрыть инспектор'
+              : 'Hide inspector'
             : isEnglish
               ? 'Show inspector'
-              : 'Показать инспектор'
+              : 'Show inspector'
         }
       >
         {isInspectorOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
@@ -4044,18 +4041,18 @@ const App = () => {
   )
 
   const pointInspector = (
-    <aside className="inspector-panel" aria-label="Инспектор точки">
+    <aside className="inspector-panel" aria-label="Point inspector">
       <header className="inspector-header">
         <div>
-          <p className="eyebrow">Точка</p>
+          <p className="eyebrow">Point</p>
           <h2>{selectedAnalysis.label}</h2>
         </div>
         <button
           className="icon-button"
           type="button"
           onClick={() => setIsInspectorOpen(false)}
-          aria-label="Скрыть инспектор"
-          title="Скрыть инспектор"
+          aria-label="Hide inspector"
+          title="Hide inspector"
         >
           <PanelRightClose size={18} />
         </button>
@@ -4069,15 +4066,15 @@ const App = () => {
           {Math.round(selectedAnalysis.score * 100)}
         </span>
         <div>
-          <span>Риск {Math.round(selectedAnalysis.riskScore * 100)}</span>
-          <strong>Доверие {Math.round(selectedAnalysis.confidence * 100)}%</strong>
+          <span>Risk {Math.round(selectedAnalysis.riskScore * 100)}</span>
+          <strong>Confidence {Math.round(selectedAnalysis.confidence * 100)}%</strong>
         </div>
       </div>
 
       <section className="panel-section analysis-card">
         <div className="analysis-head">
           <div>
-            <span className="mini-label">Координаты</span>
+            <span className="mini-label">Coordinates</span>
             <strong>
               {selectedAnalysis.point.lat.toFixed(5)}, {selectedAnalysis.point.lng.toFixed(5)}
             </strong>
@@ -4093,19 +4090,19 @@ const App = () => {
         />
         <div className="point-context">
           <div>
-            <span>Плюс</span>
+            <span>Upside</span>
             <strong>{selectedAnalysis.bestFactor.detail}</strong>
           </div>
           <div>
-            <span>Риск</span>
+            <span>Risk</span>
             <strong>{selectedAnalysis.worstFactor.detail}</strong>
           </div>
           <div>
-            <span>Здание</span>
+            <span>Building</span>
             <strong>
               {selectedBuilding.building
-                ? `${selectedBuilding.building.levels ?? '?'} эт. · ${formatMeters(selectedBuilding.distance)}`
-                : 'нет данных'}
+                ? `${selectedBuilding.building.levels ?? '?'} fl. · ${formatMeters(selectedBuilding.distance)}`
+                : 'no data'}
             </strong>
           </div>
         </div>
@@ -4137,18 +4134,18 @@ const App = () => {
             onClick={addSelectedSite}
           >
             <Star size={16} />
-            {isSelectedSitePinned ? 'Закреплено' : 'Закрепить'}
+            {isSelectedSitePinned ? 'Pinned' : 'Pin'}
           </button>
           <button className="text-button" type="button" onClick={exportReport}>
             <Download size={16} />
-            Экспорт
+            Export
           </button>
         </div>
       </section>
 
       <section className="panel-section">
         <div className="section-title">
-          <span>Закрепленные</span>
+          <span>Pinned sites</span>
           <Star size={16} />
         </div>
         <div className="shortlist">
@@ -4161,7 +4158,7 @@ const App = () => {
               </div>
             ))
           ) : (
-            <p className="empty-note">Нет закрепленных точек.</p>
+            <p className="empty-note">No pinned points.</p>
           )}
         </div>
       </section>
@@ -4174,7 +4171,7 @@ const App = () => {
         isInspectorOpen ? '' : 'right-collapsed'
       }`}
     >
-      <aside className="control-panel" aria-label={isEnglish ? 'Map settings' : 'Настройки карты'}>
+      <aside className="control-panel" aria-label="Map settings">
         <header className="panel-header">
           <div>
             <p className="eyebrow">{activeCity.state}</p>
@@ -4182,7 +4179,7 @@ const App = () => {
           </div>
         </header>
 
-        <section className="load-panel" aria-label="Статус загрузки">
+        <section className="load-panel" aria-label="Load status">
           <div className="load-head">
             <strong>{loadingHeadline}</strong>
             <span>{loadProgress}%</span>
@@ -4206,30 +4203,30 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Регион</span>
+            <span>Region</span>
             <SlidersHorizontal size={16} />
           </div>
           <div className="source-grid">
-            <span>Активно</span>
+            <span>Active</span>
             <strong>{activeCityLabel}, {activeCity.state}</strong>
-            <span>Выделение</span>
+            <span>Selection</span>
             <strong>
               {selectedRegionBounds
                 ? formatBoundsSummary(selectedRegionBounds)
                 : isRegionSelectMode
-                  ? 'выбор'
-                  : 'нет'}
+                  ? 'selecting'
+                  : 'none'}
             </strong>
           </div>
           <label className="range-row">
-            <span>Сетка</span>
+            <span>Grid</span>
             <select
               value={cellSizeMeters}
               onChange={(event) => setCellSizeMeters(Number(event.target.value))}
             >
               {RESOLUTION_OPTIONS.map((size) => (
                 <option key={size} value={size}>
-                  {size} м
+                  {size} m
                 </option>
               ))}
             </select>
@@ -4237,8 +4234,8 @@ const App = () => {
           <div className="resolution-row">
             <span>
               {cellSizeMeters === appliedCellSizeMeters
-                ? `Активно: ${appliedCellSizeMeters} м`
-                : `Выбрано: ${cellSizeMeters} м`}
+                ? `Active: ${appliedCellSizeMeters} m`
+                : `Selected: ${cellSizeMeters} m`}
             </span>
             <button
               className="text-button"
@@ -4246,18 +4243,18 @@ const App = () => {
               type="button"
               onClick={applyGridResolution}
             >
-              Применить
+              Apply
             </button>
           </div>
         </section>
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Этажность</span>
+            <span>Floor model</span>
             <Building2 size={16} />
           </div>
           <label className="range-row">
-            <span>Этаж</span>
+            <span>Floor</span>
             <input
               max="80"
               min="1"
@@ -4267,9 +4264,9 @@ const App = () => {
             />
           </label>
           <div className="source-grid">
-            <span>Желаемый этаж</span>
+            <span>Target floor</span>
             <strong>{desiredFloor}</strong>
-            <span>OSM здания</span>
+            <span>OSM buildings</span>
             <strong>
               {buildingDataMode === 'loading'
                 ? '...'
@@ -4277,24 +4274,24 @@ const App = () => {
                   ? `${buildingFootprints.length}/${buildingTotalCount}`
                   : buildingFootprints.length}
             </strong>
-            <span>Ближайшее</span>
+            <span>Nearest</span>
             <strong>
               {selectedBuilding.building
-                ? `${selectedBuilding.building.levels ?? '?'} эт.`
-                : 'нет данных'}
+                ? `${selectedBuilding.building.levels ?? '?'} fl.`
+                : 'no data'}
             </strong>
-            <span>Дистанция</span>
+            <span>Distance</span>
             <strong>
-              {selectedBuilding.building ? formatMeters(selectedBuilding.distance) : 'нет данных'}
+              {selectedBuilding.building ? formatMeters(selectedBuilding.distance) : 'no data'}
             </strong>
-            <span>Подходит</span>
-            <strong>{floorMatch === null ? 'нет данных' : floorMatch ? 'да' : 'нет'}</strong>
+            <span>Match</span>
+            <strong>{floorMatch === null ? 'no data' : floorMatch ? 'yes' : 'no'}</strong>
           </div>
         </section>
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Профиль оценки</span>
+            <span>Scoring profile</span>
           </div>
           <div className="profile-grid">
             {EVALUATION_PROFILES.map((profile) => (
@@ -4312,7 +4309,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Оверлей</span>
+            <span>Overlay</span>
             <Layers3 size={16} />
           </div>
           <div className="segmented-control">
@@ -4323,7 +4320,7 @@ const App = () => {
                 type="button"
                 onClick={() => setLayerMode(mode)}
               >
-                {mode === 'suitability' ? 'Оценка' : mode === 'risk' ? 'Риск' : 'Потенциал'}
+                {mode === 'suitability' ? 'Score' : mode === 'risk' ? 'Risk' : 'Potential'}
               </button>
             ))}
           </div>
@@ -4333,10 +4330,10 @@ const App = () => {
               type="checkbox"
               onChange={(event) => setShowOverlay(event.target.checked)}
             />
-            <span>Показывать слой</span>
+            <span>Show layer</span>
           </label>
           <label className="range-row">
-            <span>Прозрачность</span>
+            <span>Opacity</span>
             <input
               max="0.82"
               min="0.18"
@@ -4350,14 +4347,14 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Критерии</span>
+            <span>Criteria</span>
             <button
               className="text-button"
               type="button"
               onClick={() => setShowPois((current) => !current)}
             >
               {showPois ? <EyeOff size={16} /> : <Eye size={16} />}
-              {showPois ? 'Скрыть точки' : 'Показать точки'}
+              {showPois ? 'Hide points' : 'Show points'}
             </button>
           </div>
 
@@ -4402,7 +4399,7 @@ const App = () => {
                     <span className="criterion-count">{pointCount}</span>
                   </label>
                   <input
-                    aria-label={`${criterion.label}: вес`}
+                    aria-label={`${criterion.label}: weight`}
                     disabled={!criterion.enabled}
                     max="100"
                     min="0"
@@ -4420,7 +4417,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Сильные зоны</span>
+            <span>Strong zones</span>
           </div>
           <div className="rank-list">
             {neighborhoodScores.slice(0, 6).map((item) => (
@@ -4436,7 +4433,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Зоны роста</span>
+            <span>Growth zones</span>
             <Sparkles size={16} />
           </div>
           <div className="rank-list compact">
@@ -4444,8 +4441,8 @@ const App = () => {
               <div className="rank-row" key={item.name}>
                 <span className="rank-name">{item.name}</span>
                 <span className="score-pair">
-                  <span>{Math.round(item.analysis.opportunityScore * 100)} пот.</span>
-                  <strong>{Math.round(item.analysis.riskScore * 100)} риск</strong>
+                  <span>{Math.round(item.analysis.opportunityScore * 100)} potential</span>
+                  <strong>{Math.round(item.analysis.riskScore * 100)} risk</strong>
                 </span>
               </div>
             ))}
@@ -4454,22 +4451,22 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Источники</span>
+            <span>Sources</span>
           </div>
           <div className="source-grid">
             <span>OSM</span>
             <strong>{dataMode === 'live' ? pois.length : FALLBACK_POIS.length}</strong>
-            <span>Криминал</span>
+            <span>Crime</span>
             <strong>{crimeIncidents.length}</strong>
-            <span>Реестр</span>
+            <span>Registry</span>
             <strong>{registryRiskPoints.length}</strong>
-            <span>Шум</span>
+            <span>Noise</span>
             <strong>{noiseSegments.length}</strong>
-            <span>Трафик</span>
+            <span>Traffic</span>
             <strong>{trafficSegments.length}</strong>
-            <span>Земля</span>
+            <span>Land</span>
             <strong>{landPenaltyAreas.length}</strong>
-            <span>Здания</span>
+            <span>Buildings</span>
             <strong>
               {buildingDataMode === 'loading'
                 ? '...'
@@ -4479,17 +4476,17 @@ const App = () => {
             </strong>
           </div>
           {buildingIsCapped ? (
-            <p className="data-note">Здания частично: {buildingFootprints.length} из {buildingTotalCount}.</p>
+            <p className="data-note">Buildings sample: {buildingFootprints.length} of {buildingTotalCount}.</p>
           ) : null}
         </section>
 
         <footer className="panel-footer">
           <div className="legend">
-            <span>Пиздец</span>
+            <span>Critical</span>
             <div className="legend-ramp" />
-            <span>Топ</span>
+            <span>Top</span>
           </div>
-          <div className="legend-labels" aria-label="Шкала пригодности">
+          <div className="legend-labels" aria-label="Suitability scale">
             {SCORE_BANDS.map((band) => (
               <span key={band.range}>
                 <i style={{ backgroundColor: band.color }} />
@@ -4498,7 +4495,7 @@ const App = () => {
               </span>
             ))}
           </div>
-          {error ? <p className="data-note">Часть live-данных недоступна.</p> : null}
+          {error ? <p className="data-note">Some live data is unavailable.</p> : null}
         </footer>
       </aside>
 

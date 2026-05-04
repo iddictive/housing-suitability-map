@@ -209,39 +209,39 @@ export const MAJOR_CITIES_BY_STATE: Record<string, string[]> = {
 }
 
 export const INITIAL_CRITERIA: Criterion[] = [
-  { id: 'parks', label: 'Парки', enabled: true, weight: 58, thresholdKm: 1.2, mode: 'nearIsGood' },
-  { id: 'groceries', label: 'Магазины', enabled: true, weight: 86, thresholdKm: 1, mode: 'nearIsGood' },
-  { id: 'noise', label: 'Шум', enabled: true, weight: 76, thresholdKm: 1.15, mode: 'farIsGood' },
-  { id: 'transit', label: 'Транспорт', enabled: true, weight: 58, thresholdKm: 0.9, mode: 'nearIsGood' },
-  { id: 'center', label: 'Центр', enabled: true, weight: 42, thresholdKm: 8, mode: 'nearIsGood' },
-  { id: 'crime', label: 'Криминал', enabled: true, weight: 96, thresholdKm: 1, mode: 'belowAverageIsGood' },
-  { id: 'registry', label: 'Реестр', enabled: true, weight: 82, thresholdKm: 1, mode: 'belowAverageIsGood' },
+  { id: 'parks', label: 'Parks', enabled: true, weight: 58, thresholdKm: 1.2, mode: 'nearIsGood' },
+  { id: 'groceries', label: 'Groceries', enabled: true, weight: 86, thresholdKm: 1, mode: 'nearIsGood' },
+  { id: 'noise', label: 'Noise', enabled: true, weight: 76, thresholdKm: 1.15, mode: 'farIsGood' },
+  { id: 'transit', label: 'Transit', enabled: true, weight: 58, thresholdKm: 0.9, mode: 'nearIsGood' },
+  { id: 'center', label: 'Center', enabled: true, weight: 42, thresholdKm: 8, mode: 'nearIsGood' },
+  { id: 'crime', label: 'Crime', enabled: true, weight: 96, thresholdKm: 1, mode: 'belowAverageIsGood' },
+  { id: 'registry', label: 'Registry', enabled: true, weight: 82, thresholdKm: 1, mode: 'belowAverageIsGood' },
 ]
 
 export const EVALUATION_PROFILES: EvaluationProfile[] = [
   {
     id: 'balanced',
-    label: 'Баланс',
+    label: 'Balanced',
     weights: { parks: 58, groceries: 86, noise: 76, transit: 58, center: 42, crime: 96, registry: 82 },
   },
   {
     id: 'quiet',
-    label: 'Тихий премиум',
+    label: 'Quiet premium',
     weights: { parks: 64, groceries: 64, noise: 100, transit: 38, center: 28, crime: 100, registry: 88 },
   },
   {
     id: 'carfree',
-    label: 'Без авто',
+    label: 'Car-free',
     weights: { parks: 50, groceries: 92, noise: 70, transit: 96, center: 68, crime: 88, registry: 74 },
   },
   {
     id: 'family',
-    label: 'Семья',
+    label: 'Family',
     weights: { parks: 84, groceries: 86, noise: 90, transit: 48, center: 24, crime: 100, registry: 100 },
   },
   {
     id: 'investor',
-    label: 'Инвестор',
+    label: 'Investor',
     weights: { parks: 46, groceries: 78, noise: 72, transit: 86, center: 74, crime: 92, registry: 80 },
   },
 ]
@@ -278,14 +278,14 @@ export const INITIAL_LOAD_STAGES: Record<LoadStageId, LoadStage> = {
 }
 
 export const SCORE_BANDS = [
-  { min: 0, max: 10, range: '0-10', label: 'Нежилая зона', color: '#d7191c', rgb: [215, 25, 28] },
-  { min: 11, max: 20, range: '11-20', label: 'Пиздец', color: '#d7191c', rgb: [215, 25, 28] },
-  { min: 21, max: 30, range: '21-30', label: 'Очень плохо', color: '#e85b20', rgb: [232, 91, 32] },
-  { min: 31, max: 40, range: '31-40', label: 'Плохо', color: '#f07c24', rgb: [240, 124, 36] },
-  { min: 41, max: 50, range: '41-50', label: 'Ниже среднего', color: '#f4b63f', rgb: [244, 182, 63] },
-  { min: 51, max: 60, range: '51-60', label: 'Средне', color: '#f4d03f', rgb: [244, 208, 63] },
-  { min: 61, max: 70, range: '61-70', label: 'Хорошо', color: '#32a852', rgb: [50, 168, 82] },
-  { min: 71, max: 80, range: '71-80', label: 'Очень хорошо', color: '#1aa577', rgb: [26, 165, 119] },
-  { min: 81, max: 90, range: '81-90', label: 'Отлично', color: '#1787e0', rgb: [23, 135, 224] },
-  { min: 91, max: 100, range: '91-100', label: 'Топ', color: '#7b2ff7', rgb: [123, 47, 247] },
+  { min: 0, max: 10, range: '0-10', label: 'Non-residential', color: '#d7191c', rgb: [215, 25, 28] },
+  { min: 11, max: 20, range: '11-20', label: 'Critical', color: '#d7191c', rgb: [215, 25, 28] },
+  { min: 21, max: 30, range: '21-30', label: 'Very poor', color: '#e85b20', rgb: [232, 91, 32] },
+  { min: 31, max: 40, range: '31-40', label: 'Poor', color: '#f07c24', rgb: [240, 124, 36] },
+  { min: 41, max: 50, range: '41-50', label: 'Below average', color: '#f4b63f', rgb: [244, 182, 63] },
+  { min: 51, max: 60, range: '51-60', label: 'Average', color: '#f4d03f', rgb: [244, 208, 63] },
+  { min: 61, max: 70, range: '61-70', label: 'Good', color: '#32a852', rgb: [50, 168, 82] },
+  { min: 71, max: 80, range: '71-80', label: 'Very good', color: '#1aa577', rgb: [26, 165, 119] },
+  { min: 81, max: 90, range: '81-90', label: 'Excellent', color: '#1787e0', rgb: [23, 135, 224] },
+  { min: 91, max: 100, range: '91-100', label: 'Top', color: '#7b2ff7', rgb: [123, 47, 247] },
 ] as const
