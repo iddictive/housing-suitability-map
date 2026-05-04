@@ -5,12 +5,11 @@ const memoryApiCache = new Map<string, unknown>()
 let overpassRequestQueue = Promise.resolve()
 
 const OVERPASS_ENDPOINTS = [
-  'https://overpass.osm.ch/api/interpreter',
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
 ]
 
-const OVERPASS_TIMEOUT_MS = 18_000
+const OVERPASS_TIMEOUT_MS = 65_000
 
 const apiCacheKey = (key: string) => `${API_CACHE_VERSION}:${key}`
 

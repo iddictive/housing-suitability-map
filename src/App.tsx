@@ -347,7 +347,7 @@ const buildOverpassQuery = (bounds: MapBounds) => {
   const bbox = boundsToBbox(bounds)
 
   return `
-[out:json][timeout:14];
+[out:json][timeout:45];
 (
   node["leisure"="park"](${bbox});
   way["leisure"="park"](${bbox});
@@ -370,9 +370,9 @@ const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
   const bbox = boundsToBbox(bounds)
 
   return `
-[out:json][timeout:14];
+[out:json][timeout:45];
 (
-  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|living_street|unclassified|service)$"](${bbox});
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary)$"](${bbox});
   way["railway"~"^(rail|light_rail|subway)$"](${bbox});
   way["aeroway"~"^(runway|taxiway|apron|aerodrome)$"](${bbox});
   relation["aeroway"~"^(runway|taxiway|apron|aerodrome)$"](${bbox});
