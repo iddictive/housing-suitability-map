@@ -181,11 +181,25 @@ const titleCasePlaceName = (value: string) =>
     })
     .join(' ')
 
+const MAX_RENDERED_GRID_CELLS = 45_000
+const GRID_SIZE_STEP_METERS = 50
+
 const formatBoundsSummary = (bounds: MapBounds) => {
   const latSpanKm = (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT / 1000
   const lngSpanKm = (bounds.east - bounds.west) * metersPerDegreeLngForBounds(bounds) / 1000
 
   return `${latSpanKm.toFixed(1)} x ${lngSpanKm.toFixed(1)} km`
+}
+
+const renderedCellSizeForBounds = (bounds: MapBounds, requestedCellSizeMeters: number) => {
+  const widthMeters = Math.max(1, (bounds.east - bounds.west) * metersPerDegreeLngForBounds(bounds))
+  const heightMeters = Math.max(1, (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT)
+  const minimumCellSize = Math.sqrt((widthMeters * heightMeters) / MAX_RENDERED_GRID_CELLS)
+
+  return Math.max(
+    requestedCellSizeMeters,
+    Math.ceil(minimumCellSize / GRID_SIZE_STEP_METERS) * GRID_SIZE_STEP_METERS,
+  )
 }
 
 const slugifyFilePart = (value: string) =>
@@ -2024,7 +2038,8 @@ const mixSuitabilityField = (
   const residentialCandidateMaskByCell = residentialEvidence.residentialCandidateMaskByCell
   const enabledCriteria = criteria.filter((criterion) => criterion.enabled && criterion.weight > 0)
   const totalWeight = enabledCriteria.reduce((total, criterion) => total + criterion.weight, 0)
-  const habitableRawScores: number[] = []
+  let minHabitableScore = Number.POSITIVE_INFINITY
+  let maxHabitableScore = Number.NEGATIVE_INFINITY
   let scoreTotal = 0
   let habitableCellCount = 0
   const isEligibleCell = (index: number) =>
@@ -2052,13 +2067,18 @@ const mixSuitabilityField = (
     rawScores[index] = cappedScore
 
     if (isEligibleCell(index)) {
-      habitableRawScores.push(cappedScore)
+      if (cappedScore < minHabitableScore) {
+        minHabitableScore = cappedScore
+      }
+
+      if (cappedScore > maxHabitableScore) {
+        maxHabitableScore = cappedScore
+      }
+
       habitableCellCount += 1
     }
   }
 
-  const minHabitableScore = Math.min(...habitableRawScores)
-  const maxHabitableScore = Math.max(...habitableRawScores)
   const scoreRange = maxHabitableScore - minHabitableScore
 
   for (let index = 0; index < cellCount; index += 1) {
@@ -2914,6 +2934,8 @@ const SuitabilityCanvasOverlay = ({
 
     const AREA_DETAIL_MIN_ZOOM = 12
     const ROAD_DETAIL_MIN_ZOOM = 13
+    const vectorDetailCount = field.overlayExclusionAreas.length + field.overlayExclusionLines.length
+    const canDrawVectorDetail = vectorDetailCount <= 2_500
 
     const draw = () => {
       if (isZooming) {
@@ -2923,8 +2945,10 @@ const SuitabilityCanvasOverlay = ({
       const size = map.getSize()
       const deviceScale = window.devicePixelRatio || 1
       const zoom = map.getZoom()
-      const shouldDrawAreaDetail = !isInteracting && zoom >= AREA_DETAIL_MIN_ZOOM
-      const shouldDrawRoadDetail = !isInteracting && zoom >= ROAD_DETAIL_MIN_ZOOM
+      const shouldDrawAreaDetail =
+        canDrawVectorDetail && !isInteracting && zoom >= AREA_DETAIL_MIN_ZOOM
+      const shouldDrawRoadDetail =
+        canDrawVectorDetail && !isInteracting && zoom >= ROAD_DETAIL_MIN_ZOOM
       const topLeft = map.containerPointToLayerPoint([0, 0])
       const northWest = map.latLngToLayerPoint([field.north, field.west])
       const southEast = map.latLngToLayerPoint([field.south, field.east])
@@ -3483,7 +3507,6 @@ const App = () => {
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
   const [appLanguage, setAppLanguage] = useState<'ru' | 'en'>('en')
-  const deferredCellSizeMeters = useDeferredValue(appliedCellSizeMeters)
   const deferredCriteria = useDeferredValue(criteria)
   const isEnglish = appLanguage === 'en'
   const shellTitle = isEnglish ? 'Housing suitability map' : 'Housing suitability map'
@@ -3511,6 +3534,11 @@ const App = () => {
   )
   const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
   const activeDataBounds = useMemo(() => activeCity.dataBounds ?? activeCity.bounds, [activeCity])
+  const renderedCellSizeMeters = useMemo(
+    () => renderedCellSizeForBounds(activeCity.bounds, appliedCellSizeMeters),
+    [activeCity.bounds, appliedCellSizeMeters],
+  )
+  const deferredCellSizeMeters = useDeferredValue(renderedCellSizeMeters)
   const activeZoneCacheKey = useMemo(
     () => `${activeCity.id}:${boundsCachePart(activeDataBounds)}`,
     [activeCity.id, activeDataBounds],
@@ -4300,6 +4328,7 @@ const App = () => {
   const applyGridResolution = useCallback(() => {
     setAppliedCellSizeMeters(cellSizeMeters)
   }, [cellSizeMeters])
+  const renderedGridIsThrottled = renderedCellSizeMeters > appliedCellSizeMeters
 
   const dataCoverage = useMemo(() => {
     const sourceScores = [
@@ -4479,6 +4508,7 @@ const App = () => {
       profile: activeProfileId,
       location: { state: activeCity.state, city: activeCity.city, scoreCenter: scoreCenterForCity(activeCity) },
       gridMeters: appliedCellSizeMeters,
+      renderedGridMeters: renderedCellSizeMeters,
       averageScore: hasEvaluatedCells ? averageScore : null,
       selected: selectedAnalysis,
       shortlist: savedSites,
@@ -4509,6 +4539,7 @@ const App = () => {
     activeCity,
     averageScore,
     appliedCellSizeMeters,
+    renderedCellSizeMeters,
     buildingFootprints.length,
     buildingIsCapped,
     buildingTotalCount,
@@ -4889,6 +4920,7 @@ const App = () => {
               {cellSizeMeters === appliedCellSizeMeters
                 ? `Active: ${appliedCellSizeMeters} m`
                 : `Selected: ${cellSizeMeters} m`}
+              {renderedGridIsThrottled ? ` · rendered ${renderedCellSizeMeters} m` : ''}
             </span>
             <button
               className="text-button"
