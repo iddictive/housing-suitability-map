@@ -648,7 +648,7 @@ const elementToNoiseSegment = (element: OverpassElement): NoiseSegment | null =>
     ? 'airport'
     : element.tags?.railway
       ? 'rail'
-      : highway && ['motorway', 'trunk', 'primary', 'secondary'].includes(highway)
+      : highway && ['motorway', 'trunk', 'primary', 'secondary', 'tertiary'].includes(highway)
         ? 'road'
         : null
 
@@ -1089,14 +1089,27 @@ const fetchPois = async (signal: AbortSignal, bounds: MapBounds, force = false) 
     })
 }
 
-const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
+const fetchTransportMaskPayload = (signal: AbortSignal, bounds: MapBounds, force = false) =>
+  cachedRequest<{ elements?: OverpassElement[] }>(
+    `masks-transport:${boundsCachePart(bounds)}`,
+    () => fetchOverpassJson(buildTransportMaskQuery(bounds), signal, 'transport masks'),
+    { force },
+  )
+
+const elementsToNoiseSegments = (elements: OverpassElement[]) =>
+  elements
+    .map(elementToNoiseSegment)
+    .filter((segment): segment is NoiseSegment => Boolean(segment))
+
+const fetchNoiseSegments = async (
+  signal: AbortSignal,
+  bounds: MapBounds,
+  force = false,
+  transportPayloadPromise = fetchTransportMaskPayload(signal, bounds, force),
+) => {
   const boundsKey = boundsCachePart(bounds)
   const payloadResults = await Promise.allSettled([
-    cachedRequest<{ elements?: OverpassElement[] }>(
-      `masks-transport:${boundsKey}`,
-      () => fetchOverpassJson(buildTransportMaskQuery(bounds), signal, 'transport masks'),
-      { force },
-    ),
+    transportPayloadPromise,
     cachedRequest<{ elements?: OverpassElement[] }>(
       `masks-water:${boundsKey}`,
       () => fetchOverpassJson(buildWaterMaskQuery(bounds), signal, 'water masks'),
@@ -1117,11 +1130,20 @@ const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force 
   }
 
   return {
-    segments: elements
-      .map(elementToNoiseSegment)
-      .filter((segment): segment is NoiseSegment => Boolean(segment)),
+    segments: elementsToNoiseSegments(elements),
     areas: elements.flatMap(elementToLandPenaltyAreas),
   }
+}
+
+const fetchOsmTrafficSegments = async (
+  signal: AbortSignal,
+  bounds: MapBounds,
+  force = false,
+  transportPayloadPromise = fetchTransportMaskPayload(signal, bounds, force),
+) => {
+  const payload = await transportPayloadPromise
+
+  return trafficSegmentsFromOsmRoads(elementsToNoiseSegments(payload.elements ?? []))
 }
 
 const buildingPriority = (building: BuildingFootprint) => {
@@ -3695,10 +3717,21 @@ const App = () => {
     const registryPromise = hasLocalRegistryRisk
       ? fetchRegistryRiskPoints(controller.signal, activeDataBounds, forceRefresh)
       : Promise.resolve([])
-    const noisePromise = fetchNoiseSegments(controller.signal, activeDataBounds, forceRefresh)
+    const transportMaskPromise = fetchTransportMaskPayload(controller.signal, activeDataBounds, forceRefresh)
+    const noisePromise = fetchNoiseSegments(
+      controller.signal,
+      activeDataBounds,
+      forceRefresh,
+      transportMaskPromise,
+    )
     const trafficPromise = hasMassDotTraffic
       ? fetchTrafficSegments(controller.signal, activeDataBounds, forceRefresh)
-      : Promise.resolve([])
+      : fetchOsmTrafficSegments(
+          controller.signal,
+          activeDataBounds,
+          forceRefresh,
+          transportMaskPromise,
+        )
     let osmTrafficProxy: TrafficSegment[] = []
     let hasLiveTraffic = false
 
@@ -3845,9 +3878,9 @@ const App = () => {
         if (hasLiveTraffic) {
           setTrafficSegments(nextTrafficSegments)
           setLoadStage('traffic', {
-            status: 'live',
+            status: hasMassDotTraffic ? 'live' : 'partial',
             count: nextTrafficSegments.length,
-            detail: hasMassDotTraffic ? 'loaded' : 'no roads',
+            detail: hasMassDotTraffic ? 'loaded' : 'OSM proxy',
           })
         } else if (osmTrafficProxy.length > 0) {
           setTrafficSegments(osmTrafficProxy)
@@ -4010,9 +4043,18 @@ const App = () => {
         if (trafficResult.status === 'fulfilled') {
           setTrafficSegments(nextTrafficSegments)
           setLoadStage('traffic', {
-            status: trafficUsesFallback ? 'partial' : nextTrafficSegments.length > 0 ? 'live' : 'empty',
+            status:
+              trafficUsesFallback || (!hasMassDotTraffic && nextTrafficSegments.length > 0)
+                ? 'partial'
+                : nextTrafficSegments.length > 0
+                  ? 'live'
+                  : 'empty',
             count: nextTrafficSegments.length,
-            detail: trafficUsesFallback ? 'OSM proxy' : hasMassDotTraffic ? 'loaded' : 'no roads',
+            detail: trafficUsesFallback || (!hasMassDotTraffic && nextTrafficSegments.length > 0)
+              ? 'OSM proxy'
+              : hasMassDotTraffic
+                ? 'loaded'
+                : 'no roads',
           })
         } else if (trafficUsesFallback) {
           setTrafficSegments(nextTrafficSegments)
