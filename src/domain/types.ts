@@ -10,12 +10,24 @@ export type MapBounds = {
   east: number
 }
 
+export type CountryCode = 'us' | 'ru'
+
+export type RegionOption = {
+  code: string
+  name: string
+  countryCode: CountryCode
+  countryName: string
+  supportsPostalCode: boolean
+}
+
 export type CityConfig = {
   id: string
+  countryCode: CountryCode
   state: string
   city: string
   bounds: MapBounds
   center: LatLng
+  scoreCenter?: LatLng
   checkpoints: Array<LatLng & { name: string }>
 }
 

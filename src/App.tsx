@@ -50,20 +50,20 @@ import {
   FALLBACK_POIS,
   INITIAL_CRITERIA,
   INITIAL_LOAD_STAGES,
-  MAJOR_CITIES_BY_STATE,
+  MAJOR_CITIES_BY_REGION,
   MAJOR_ROAD_HARD_NOISE_METERS,
   MAJOR_ROAD_SOFT_NOISE_METERS,
   METERS_PER_DEGREE_LAT,
   PARK_SCORE_FLOOR,
   RAIL_HARD_NOISE_METERS,
   RAIL_SOFT_NOISE_METERS,
+  REGION_OPTIONS,
   REGISTRY_RISK_RADIUS_METERS,
   RESIDENTIAL_BUILDING_EVIDENCE_METERS,
   RESOLUTION_OPTIONS,
   ROAD_SURFACE_NO_GO_BUFFER_METERS,
   SCORE_BANDS,
   TRAFFIC_MAX_AADT,
-  US_STATES,
 } from './domain/config'
 import {
   boundsCachePart,
@@ -126,6 +126,7 @@ import type {
   PointAnalysis,
   PointDataItem,
   ProjectedPoi,
+  RegionOption,
   RegistryDataMode,
   RegistryRiskPoint,
   SavedSite,
@@ -192,7 +193,7 @@ const slugifyFilePart = (value: string) =>
   value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '') || 'region'
 
 type NominatimPlace = {
@@ -235,7 +236,7 @@ const isCityLevelPlace = (place: NominatimPlace) => {
 
 const cityConfigFromNominatimPlace = (
   place: NominatimPlace,
-  stateCode: string,
+  region: RegionOption,
   label: string,
   idPrefix: string,
 ): CityConfig => {
@@ -261,8 +262,9 @@ const cityConfigFromNominatimPlace = (
   )
 
   return {
-    id: `${idPrefix}-${stateCode}-${slugifyFilePart(label)}`,
-    state: stateCode,
+    id: `${idPrefix}-${region.code}-${slugifyFilePart(label)}`,
+    countryCode: region.countryCode,
+    state: region.code,
     city: label,
     bounds: safeBounds,
     center,
@@ -270,26 +272,35 @@ const cityConfigFromNominatimPlace = (
   }
 }
 
-const fetchCityConfig = async (stateCode: string, cityName: string): Promise<CityConfig> => {
-  const state = US_STATES.find((item) => item.code === stateCode)
+const citySearchQuery = (city: string, region: RegionOption) =>
+  region.countryCode === 'us'
+    ? `${city}, ${region.name}, ${region.countryName}`
+    : `${city}, ${region.countryName}`
+
+const fetchCityConfig = async (regionCode: string, cityName: string): Promise<CityConfig> => {
+  const region = REGION_OPTIONS.find((item) => item.code === regionCode)
   const city = titleCasePlaceName(cityName)
 
-  if (!state || city.length === 0) {
+  if (!region || city.length === 0) {
     throw new Error('city required')
   }
 
-  if ([state.name.toLowerCase(), state.code.toLowerCase()].includes(city.toLowerCase())) {
+  if (
+    [region.name.toLowerCase(), region.code.toLowerCase(), region.countryName.toLowerCase()].includes(
+      city.toLowerCase(),
+    )
+  ) {
     throw new Error('city required')
   }
 
   const searchParams = new URLSearchParams({
     format: 'jsonv2',
     limit: '1',
-    countrycodes: 'us',
+    countrycodes: region.countryCode,
     addressdetails: '1',
-    q: `${city}, ${state.name}, USA`,
+    q: citySearchQuery(city, region),
   })
-  const cacheKey = `geocode:${stateCode}:${city.toLowerCase()}`
+  const cacheKey = `geocode:${region.code}:${city.toLowerCase()}`
   const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
 
@@ -305,26 +316,26 @@ const fetchCityConfig = async (stateCode: string, cityName: string): Promise<Cit
     throw new Error('city not found')
   }
 
-  return cityConfigFromNominatimPlace(place, stateCode, city, 'custom')
+  return cityConfigFromNominatimPlace(place, region, city, 'custom')
 }
 
-const fetchZipConfig = async (stateCode: string, zipCode: string): Promise<CityConfig> => {
-  const state = US_STATES.find((item) => item.code === stateCode)
+const fetchZipConfig = async (regionCode: string, zipCode: string): Promise<CityConfig> => {
+  const region = REGION_OPTIONS.find((item) => item.code === regionCode)
   const normalizedZip = zipCode.trim()
 
-  if (!state || !isUsZipCode(normalizedZip)) {
+  if (!region || !region.supportsPostalCode || !isUsZipCode(normalizedZip)) {
     throw new Error('zip required')
   }
 
   const searchParams = new URLSearchParams({
     format: 'jsonv2',
     limit: '1',
-    countrycodes: 'us',
+    countrycodes: region.countryCode,
     addressdetails: '1',
     postalcode: normalizedZip,
-    state: state.name,
+    state: region.name,
   })
-  const cacheKey = `zip:${stateCode}:${normalizedZip.toLowerCase()}`
+  const cacheKey = `zip:${region.code}:${normalizedZip.toLowerCase()}`
   const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
 
@@ -340,8 +351,17 @@ const fetchZipConfig = async (stateCode: string, zipCode: string): Promise<CityC
     throw new Error('zip not found')
   }
 
-  return cityConfigFromNominatimPlace(place, stateCode, `ZIP ${normalizedZip}`, 'zip')
+  return cityConfigFromNominatimPlace(place, region, `ZIP ${normalizedZip}`, 'zip')
 }
+
+const supportsBostonCrimeData = (city: CityConfig) => city.id === 'ma-boston'
+
+const supportsMassDotTrafficData = (city: CityConfig) =>
+  city.countryCode === 'us' && city.state === 'MA'
+
+const supportsLocalRegistryRiskData = (city: CityConfig) => city.countryCode === 'us'
+
+const scoreCenterForCity = (city: CityConfig) => city.scoreCenter ?? city.center
 
 const buildOverpassQuery = (bounds: MapBounds) => {
   const bbox = boundsToBbox(bounds)
@@ -2283,9 +2303,9 @@ const analyzePoint = (
     : 1
   const noiseScore = Math.min(nightlifeScore, transportScore)
   const transitScore = scoreByDistance(nearestTransit.distance / 1000, criteriaById.transit)
-  const cityCenter = latLngToMeters(city.center, bounds, field.metersPerDegreeLng)
+  const scoringCenter = latLngToMeters(scoreCenterForCity(city), bounds, field.metersPerDegreeLng)
   const centerScore = scoreByDistance(
-    Math.hypot(meters.x - cityCenter.x, meters.y - cityCenter.y) / 1000,
+    Math.hypot(meters.x - scoringCenter.x, meters.y - scoringCenter.y) / 1000,
     criteriaById.center,
   )
   const crimeScore = crimeScoreAtPoint(point, crimeIncidents, field.averageCrimeDensity, bounds, field.metersPerDegreeLng)
@@ -2369,7 +2389,7 @@ const analyzePoint = (
       id: 'center',
       label: 'Center',
       score: centerScore,
-      detail: `${formatMeters(Math.hypot(meters.x - cityCenter.x, meters.y - cityCenter.y))}`,
+      detail: `${formatMeters(Math.hypot(meters.x - scoringCenter.x, meters.y - scoringCenter.y))}`,
     },
     {
       id: 'crime',
@@ -2994,9 +3014,9 @@ const PointCompletenessPanel = ({
   }
   const landItem = analysis.dataCompleteness[0]
   const crimeItem: PointDataItem =
-    city.id === 'ma-boston'
+    supportsBostonCrimeData(city)
       ? analysis.dataCompleteness[2]
-      : { label: 'Crime', value: 'Boston only', tone: 'neutral' }
+      : { label: 'Crime', value: city.countryCode === 'us' ? 'Boston only' : 'n/a', tone: 'neutral' }
   const compactItems = [
     landItem,
     analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
@@ -3084,6 +3104,11 @@ const App = () => {
   const isEnglish = appLanguage === 'en'
   const shellTitle = isEnglish ? 'Housing suitability map' : 'Housing suitability map'
   const languageLabel = isEnglish ? 'EN' : 'RU'
+  const activeRegion = useMemo(
+    () => REGION_OPTIONS.find((region) => region.code === selectedState) ?? REGION_OPTIONS[0],
+    [selectedState],
+  )
+  const supportsPostalSearch = activeRegion.supportsPostalCode
 
   const availableCities = useMemo(
     () => [
@@ -3107,7 +3132,7 @@ const App = () => {
   )
   const suggestedCityNames = useMemo(() => {
     const cityNames = new Set([
-      ...(MAJOR_CITIES_BY_STATE[selectedState] ?? []),
+      ...(MAJOR_CITIES_BY_REGION[selectedState] ?? []),
       ...availableCities.map((city) => city.city),
     ])
 
@@ -3145,10 +3170,12 @@ const App = () => {
       const label = `Region ${titleCasePlaceName(baseLabel)}`
       const regionCity: CityConfig = {
         id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
+        countryCode: activeCity.countryCode,
         state: activeCity.state,
         city: label,
         bounds,
         center,
+        scoreCenter: scoreCenterForCity(activeCity),
         checkpoints: genericCityCheckpoints(label, bounds, center),
       }
 
@@ -3163,6 +3190,9 @@ const App = () => {
     const controller = new AbortController()
     const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
     const mainSnapshotKey = zoneSnapshotKey('main', activeCity)
+    const hasBostonCrime = supportsBostonCrimeData(activeCity)
+    const hasMassDotTraffic = supportsMassDotTrafficData(activeCity)
+    const hasLocalRegistryRisk = supportsLocalRegistryRiskData(activeCity)
 
     Promise.resolve().then(() => {
       if (controller.signal.aborted) {
@@ -3192,12 +3222,13 @@ const App = () => {
           setLoadStage('crime', {
             status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
             count: snapshot.crimeIncidents.length,
-            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : 'Boston only',
+            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : hasBostonCrime ? 'Boston only' : 'unsupported',
           })
           setLoadStage('registry', {
             status: snapshot.registryDataMode === 'live' ? 'cached' : 'empty',
             count: snapshot.registryRiskPoints?.length ?? 0,
-            detail: snapshot.registryDataMode === 'live' ? 'snapshot' : 'local dataset',
+            detail:
+              snapshot.registryDataMode === 'live' ? 'snapshot' : hasLocalRegistryRisk ? 'local dataset' : 'unsupported',
           })
           setLoadStage('noise', {
             status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
@@ -3216,27 +3247,33 @@ const App = () => {
       setIsLoading(true)
       setLoadStage('osm', { status: 'loading', count: undefined, detail: 'amenities + parks' })
       setLoadStage('crime', {
-        status: activeCity.id === 'ma-boston' ? 'loading' : 'empty',
+        status: hasBostonCrime ? 'loading' : 'empty',
         count: 0,
-        detail: activeCity.id === 'ma-boston' ? 'Boston live' : 'Boston only',
+        detail: hasBostonCrime ? 'Boston live' : activeCity.countryCode === 'us' ? 'Boston only' : 'unsupported',
       })
-      setLoadStage('registry', { status: 'loading', count: 0, detail: 'sanitized local' })
+      setLoadStage('registry', {
+        status: hasLocalRegistryRisk ? 'loading' : 'empty',
+        count: 0,
+        detail: hasLocalRegistryRisk ? 'sanitized local' : 'unsupported',
+      })
       setLoadStage('noise', { status: 'loading', count: undefined, detail: 'roads + masks' })
       setLoadStage('traffic', {
         status: 'loading',
         count: 0,
-        detail: activeCity.state === 'MA' ? 'MassDOT AADT' : 'OSM road proxy',
+        detail: hasMassDotTraffic ? 'MassDOT AADT' : 'OSM road proxy',
       })
     })
 
     Promise.allSettled([
       fetchPois(controller.signal, activeCity.bounds, forceRefresh),
-      activeCity.id === 'ma-boston'
+      hasBostonCrime
         ? fetchCrimeIncidents(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
-      fetchRegistryRiskPoints(controller.signal, activeCity.bounds, forceRefresh),
+      hasLocalRegistryRisk
+        ? fetchRegistryRiskPoints(controller.signal, activeCity.bounds, forceRefresh)
+        : Promise.resolve([]),
       fetchNoiseSegments(controller.signal, activeCity.bounds, forceRefresh),
-      activeCity.state === 'MA'
+      hasMassDotTraffic
         ? fetchTrafficSegments(controller.signal, activeCity.bounds, forceRefresh)
         : Promise.resolve([]),
     ])
@@ -3305,7 +3342,14 @@ const App = () => {
           setLoadStage('crime', {
             status: nextCrimeIncidents.length > 0 ? 'live' : 'empty',
             count: nextCrimeIncidents.length,
-            detail: nextCrimeIncidents.length > 0 ? 'loaded' : 'Boston only',
+            detail:
+              nextCrimeIncidents.length > 0
+                ? 'loaded'
+                : hasBostonCrime
+                  ? 'Boston only'
+                  : activeCity.countryCode === 'us'
+                    ? 'Boston only'
+                    : 'unsupported',
           })
         } else {
           setCrimeIncidents(nextCrimeIncidents)
@@ -3320,7 +3364,12 @@ const App = () => {
           setLoadStage('registry', {
             status: nextRegistryRiskPoints.length > 0 ? 'live' : 'empty',
             count: nextRegistryRiskPoints.length,
-            detail: nextRegistryRiskPoints.length > 0 ? 'loaded' : 'no local points',
+            detail:
+              nextRegistryRiskPoints.length > 0
+                ? 'loaded'
+                : hasLocalRegistryRisk
+                  ? 'no local points'
+                  : 'unsupported',
           })
         } else {
           setRegistryRiskPoints([])
@@ -3349,7 +3398,7 @@ const App = () => {
           setLoadStage('traffic', {
             status: trafficUsesFallback ? 'partial' : nextTrafficSegments.length > 0 ? 'live' : 'empty',
             count: nextTrafficSegments.length,
-            detail: trafficUsesFallback ? 'OSM proxy' : activeCity.state === 'MA' ? 'loaded' : 'no roads',
+            detail: trafficUsesFallback ? 'OSM proxy' : hasMassDotTraffic ? 'loaded' : 'no roads',
           })
         } else if (trafficUsesFallback) {
           setTrafficSegments(nextTrafficSegments)
@@ -3368,8 +3417,8 @@ const App = () => {
           poiResult.status === 'fulfilled' ||
           registryResult.status === 'fulfilled' ||
           noiseResult.status === 'fulfilled' ||
-          (activeCity.id === 'ma-boston' && crimeResult.status === 'fulfilled') ||
-          (activeCity.state === 'MA' && trafficResult.status === 'fulfilled')
+          (hasBostonCrime && crimeResult.status === 'fulfilled') ||
+          (hasMassDotTraffic && trafficResult.status === 'fulfilled')
 
         if (hasFreshSource) {
           writeZoneSnapshot<MainDataSnapshot>(mainSnapshotKey, {
@@ -3541,6 +3590,10 @@ const App = () => {
   }, [activateCustomCity, citySearchText, selectedState])
 
   const searchZip = useCallback(() => {
+    if (!supportsPostalSearch) {
+      return
+    }
+
     setIsSearchingZip(true)
     setError(null)
 
@@ -3555,7 +3608,7 @@ const App = () => {
       .finally(() => {
         setIsSearchingZip(false)
       })
-  }, [activateCustomCity, selectedState, zipSearchText])
+  }, [activateCustomCity, selectedState, supportsPostalSearch, zipSearchText])
 
   const poisByCategory = useMemo(
     () =>
@@ -3578,12 +3631,11 @@ const App = () => {
         landPenaltyAreas,
         trafficSegments,
         activeCity.bounds,
-        activeCity.center,
+        scoreCenterForCity(activeCity),
         deferredCellSizeMeters,
       ),
     [
-      activeCity.center,
-      activeCity.bounds,
+      activeCity,
       deferredCellSizeMeters,
       crimeIncidents,
       registryRiskPoints,
@@ -3669,15 +3721,17 @@ const App = () => {
       trafficSegments.length > 0 ? 1 : 0,
     ]
 
-    if (activeCity.id === 'ma-boston') {
+    if (supportsBostonCrimeData(activeCity)) {
       sourceScores.push(crimeDataMode === 'live' ? 1 : 0)
     }
 
-    sourceScores.push(registryDataMode === 'live' ? 1 : 0.5)
+    if (supportsLocalRegistryRiskData(activeCity)) {
+      sourceScores.push(registryDataMode === 'live' ? 1 : 0.5)
+    }
 
     return sourceScores.reduce((total, score) => total + score, 0) / sourceScores.length
   }, [
-    activeCity.id,
+    activeCity,
     crimeDataMode,
     dataMode,
     landPenaltyAreas.length,
@@ -3835,7 +3889,7 @@ const App = () => {
     const report = {
       generatedAt: new Date().toISOString(),
       profile: activeProfileId,
-      location: { state: activeCity.state, city: activeCity.city },
+      location: { state: activeCity.state, city: activeCity.city, scoreCenter: scoreCenterForCity(activeCity) },
       gridMeters: appliedCellSizeMeters,
       averageScore: hasEvaluatedCells ? averageScore : null,
       selected: selectedAnalysis,
@@ -3913,19 +3967,26 @@ const App = () => {
       <div className="map-search">
         <Search size={16} />
         <select
-          aria-label="State"
+          aria-label="Region"
           value={selectedState}
           onChange={(event) => {
             const nextState = event.target.value
+            const nextCity = CITY_OPTIONS.find((option) => option.state === nextState)
 
             setSelectedState(nextState)
+            setCustomCity(null)
             setSelectedRegionBounds(null)
-            setCitySearchText(MAJOR_CITIES_BY_STATE[nextState]?.[0] ?? '')
+            setSelectedCityId(nextCity?.id ?? '')
+            if (nextCity) {
+              setSelectedPoint(nextCity.center)
+            }
+            setCitySearchText(MAJOR_CITIES_BY_REGION[nextState]?.[0] ?? '')
+            setZipSearchText('')
           }}
         >
-          {US_STATES.map((state) => (
-            <option key={state.code} value={state.code}>
-              {state.code}
+          {REGION_OPTIONS.map((region) => (
+            <option key={region.code} value={region.code}>
+              {region.code}
             </option>
           ))}
         </select>
@@ -3957,29 +4018,33 @@ const App = () => {
         >
           {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
         </button>
-        <input
-          aria-label="ZIP code"
-          inputMode="numeric"
-          placeholder="ZIP"
-          type="text"
-          value={zipSearchText}
-          onChange={(event) => setZipSearchText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              searchZip()
-            }
-          }}
-        />
-        <button
-          className="icon-button"
-          disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
-          type="button"
-          onClick={searchZip}
-          aria-label={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
-          title={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
-        >
-          {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
-        </button>
+        {supportsPostalSearch ? (
+          <>
+            <input
+              aria-label="ZIP code"
+              inputMode="numeric"
+              placeholder="ZIP"
+              type="text"
+              value={zipSearchText}
+              onChange={(event) => setZipSearchText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  searchZip()
+                }
+              }}
+            />
+            <button
+              className="icon-button"
+              disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
+              type="button"
+              onClick={searchZip}
+              aria-label={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
+              title={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
+            >
+              {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
+            </button>
+          </>
+        ) : null}
       </div>
       <button
         className={`icon-button ${isRegionSelectMode ? 'active' : ''}`}
