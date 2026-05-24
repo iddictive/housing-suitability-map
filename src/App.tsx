@@ -3016,6 +3016,52 @@ const MapViewportSync = ({ bounds }: { bounds: MapBounds }) => {
   return null
 }
 
+const MapLayoutResizeSync = ({ layoutKey }: { layoutKey: string }) => {
+  const map = useMap()
+
+  useEffect(() => {
+    const container = map.getContainer()
+    const observedElements = [container, container.parentElement].filter(
+      (element): element is HTMLElement => Boolean(element),
+    )
+    let frameId = 0
+    const timeoutIds: number[] = []
+
+    const invalidate = () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId)
+      }
+
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0
+        map.invalidateSize({ animate: false })
+      })
+    }
+
+    invalidate()
+    timeoutIds.push(window.setTimeout(invalidate, 80))
+    timeoutIds.push(window.setTimeout(invalidate, 220))
+
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => invalidate())
+
+    observedElements.forEach((element) => observer?.observe(element))
+    window.addEventListener('resize', invalidate)
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId)
+      }
+
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId))
+      observer?.disconnect()
+      window.removeEventListener('resize', invalidate)
+    }
+  }, [layoutKey, map])
+
+  return null
+}
+
 const PointCompletenessPanel = ({
   analysis,
   building,
@@ -4630,6 +4676,7 @@ const App = () => {
           <AttributionControl position="bottomright" prefix={false} />
           <ZoomControl position="bottomright" />
           <MapViewportSync bounds={activeCity.bounds} />
+          <MapLayoutResizeSync layoutKey={`${isLeftPanelOpen}-${isInspectorOpen}`} />
           <MapClickSelector disabled={isRegionSelectMode} onSelect={setSelectedPoint} />
           <MapRegionSelector
             active={isRegionSelectMode}
