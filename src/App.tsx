@@ -40,7 +40,6 @@ import {
   AIRPORT_HARD_NOISE_METERS,
   AIRPORT_SOFT_NOISE_METERS,
   BOSTON_BOUNDS,
-  BUILDING_MATCH_RADIUS_METERS,
   BUILDING_STORE_LIMIT,
   CITY_OPTIONS,
   CRIME_RADIUS_METERS,
@@ -2561,32 +2560,6 @@ const landCapAtPoint = (
   return cap
 }
 
-const nearestBuildingDetail = (
-  point: LatLng,
-  buildings: BuildingFootprint[],
-  field: SuitabilityField,
-) => {
-  const bounds = fieldBounds(field)
-  const target = latLngToMeters(point, bounds, field.metersPerDegreeLng)
-  let nearestDistance = Number.POSITIVE_INFINITY
-  let nearestBuilding: BuildingFootprint | null = null
-
-  for (const building of buildings) {
-    const buildingPoint = latLngToMeters(building, bounds, field.metersPerDegreeLng)
-    const distance = Math.hypot(target.x - buildingPoint.x, target.y - buildingPoint.y)
-
-    if (distance < nearestDistance) {
-      nearestDistance = distance
-      nearestBuilding = building
-    }
-  }
-
-  return {
-    distance: nearestDistance,
-    building: nearestDistance <= BUILDING_MATCH_RADIUS_METERS ? nearestBuilding : null,
-  }
-}
-
 const crimeScoreAtPoint = (
   point: LatLng,
   incidents: CrimeIncident[],
@@ -3410,38 +3383,13 @@ const MapLayoutResizeSync = ({ layoutKey }: { layoutKey: string }) => {
 
 const PointCompletenessPanel = ({
   analysis,
-  building,
-  buildingDistance,
-  buildingDataMode,
   city,
   compact = false,
 }: {
   analysis: PointAnalysis
-  building: BuildingFootprint | null
-  buildingDistance: number
-  buildingDataMode: BuildingDataMode
   city: CityConfig
   compact?: boolean
 }) => {
-  const buildingItem: PointDataItem = {
-    label: 'Building',
-    value:
-      buildingDataMode === 'loading'
-        ? 'loading'
-        : building
-          ? `${building.levels ?? '?'} fl. · ${formatMeters(buildingDistance)}`
-          : buildingDataMode === 'partial'
-            ? 'not found in partial data'
-            : 'not found',
-    tone:
-      buildingDataMode === 'loading'
-        ? 'neutral'
-        : building
-          ? 'good'
-          : buildingDataMode === 'partial'
-            ? 'warn'
-            : 'bad',
-  }
   const landItem = analysis.dataCompleteness[0]
   const crimeItem: PointDataItem =
     supportsBostonCrimeData(city)
@@ -3450,7 +3398,6 @@ const PointCompletenessPanel = ({
   const compactItems = [
     landItem,
     analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
-    building ? buildingItem : null,
   ]
     .filter((item): item is PointDataItem | FactorBreakdown => Boolean(item))
     .slice(0, 3)
@@ -3468,7 +3415,7 @@ const PointCompletenessPanel = ({
     }))
   const items = compact
     ? compactItems
-    : [landItem, crimeItem, ...analysis.dataCompleteness.slice(3), buildingItem]
+    : [landItem, crimeItem, ...analysis.dataCompleteness.slice(3)]
 
   return (
     <div className={compact ? 'point-data-grid compact' : 'point-data-grid'}>
@@ -3504,7 +3451,6 @@ const App = () => {
   const [buildingDataMode, setBuildingDataMode] = useState<BuildingDataMode>('empty')
   const [buildingTotalCount, setBuildingTotalCount] = useState(0)
   const [buildingIsCapped, setBuildingIsCapped] = useState(false)
-  const [desiredFloor, setDesiredFloor] = useState(8)
   const [isLoading, setIsLoading] = useState(true)
   const [dataMode, setDataMode] = useState<DataMode>('sample')
   const [crimeDataMode, setCrimeDataMode] = useState<CrimeDataMode>('empty')
@@ -4479,14 +4425,6 @@ const App = () => {
     ],
   )
 
-  const selectedBuilding = useMemo(
-    () => nearestBuildingDetail(selectedPoint, buildingFootprints, suitabilityField),
-    [buildingFootprints, selectedPoint, suitabilityField],
-  )
-  const floorMatch =
-    selectedBuilding.building?.levels === null || !selectedBuilding.building
-      ? null
-      : selectedBuilding.building.levels >= desiredFloor
   const selectedSiteId = `${selectedAnalysis.point.lat.toFixed(5)}-${selectedAnalysis.point.lng.toFixed(5)}`
   const isSelectedSitePinned = savedSites.some((site) => site.id === selectedSiteId)
 
@@ -4809,9 +4747,6 @@ const App = () => {
         <p className="thesis">{selectedAnalysis.thesis}</p>
         <PointCompletenessPanel
           analysis={selectedAnalysis}
-          building={selectedBuilding.building}
-          buildingDataMode={buildingDataMode}
-          buildingDistance={selectedBuilding.distance}
           city={activeCity}
         />
         <div className="point-context">
@@ -4822,14 +4757,6 @@ const App = () => {
           <div>
             <span>Risk</span>
             <strong>{selectedAnalysis.worstFactor.detail}</strong>
-          </div>
-          <div>
-            <span>Building</span>
-            <strong>
-              {selectedBuilding.building
-                ? `${selectedBuilding.building.levels ?? '?'} fl. · ${formatMeters(selectedBuilding.distance)}`
-                : 'no data'}
-            </strong>
           </div>
         </div>
         <div className="factor-list">
@@ -4972,47 +4899,6 @@ const App = () => {
             >
               Apply
             </button>
-          </div>
-        </section>
-
-        <section className="panel-section">
-          <div className="section-title">
-            <span>Floor model</span>
-            <Building2 size={16} />
-          </div>
-          <label className="range-row">
-            <span>Floor</span>
-            <input
-              max="80"
-              min="1"
-              type="range"
-              value={desiredFloor}
-              onChange={(event) => setDesiredFloor(Number(event.target.value))}
-            />
-          </label>
-          <div className="source-grid">
-            <span>Target floor</span>
-            <strong>{desiredFloor}</strong>
-            <span>OSM buildings</span>
-            <strong>
-              {buildingDataMode === 'loading'
-                ? '...'
-                : buildingIsCapped
-                  ? `${buildingFootprints.length}/${buildingTotalCount}`
-                  : buildingFootprints.length}
-            </strong>
-            <span>Nearest</span>
-            <strong>
-              {selectedBuilding.building
-                ? `${selectedBuilding.building.levels ?? '?'} fl.`
-                : 'no data'}
-            </strong>
-            <span>Distance</span>
-            <strong>
-              {selectedBuilding.building ? formatMeters(selectedBuilding.distance) : 'no data'}
-            </strong>
-            <span>Match</span>
-            <strong>{floorMatch === null ? 'no data' : floorMatch ? 'yes' : 'no'}</strong>
           </div>
         </section>
 
