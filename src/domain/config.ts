@@ -25,7 +25,7 @@ export const DEFAULT_CELL_SIZE_METERS = 100
 export const RESOLUTION_OPTIONS = [50, 100, 150, 200, 300] as const
 export const CRIME_RADIUS_METERS = 220
 export const REGISTRY_RISK_RADIUS_METERS = 350
-export const API_CACHE_VERSION = 'housing-score-v16'
+export const API_CACHE_VERSION = 'housing-score-v17'
 export const API_CACHE_TTL_MS = 1000 * 60 * 60 * 12
 export const ZONE_SNAPSHOT_TTL_MS = 1000 * 60 * 10
 export const PARK_SCORE_FLOOR = 0.55
@@ -297,7 +297,7 @@ export const MAJOR_CITIES_BY_REGION: Record<string, string[]> = {
 
 export const INITIAL_CRITERIA: Criterion[] = [
   { id: 'parks', label: 'Parks', enabled: true, weight: 58, thresholdKm: 1.2, mode: 'nearIsGood' },
-  { id: 'groceries', label: 'Groceries', enabled: true, weight: 86, thresholdKm: 1, mode: 'nearIsGood' },
+  { id: 'groceries', label: 'Groceries', enabled: true, weight: 62, thresholdKm: 1, mode: 'nearIsGood' },
   { id: 'noise', label: 'Noise', enabled: true, weight: 76, thresholdKm: 1.15, mode: 'farIsGood' },
   { id: 'transit', label: 'Transit', enabled: true, weight: 58, thresholdKm: 0.9, mode: 'nearIsGood' },
   { id: 'center', label: 'Center', enabled: true, weight: 88, thresholdKm: 12, mode: 'centerAccess' },
@@ -309,27 +309,27 @@ export const EVALUATION_PROFILES: EvaluationProfile[] = [
   {
     id: 'balanced',
     label: 'Balanced',
-    weights: { parks: 58, groceries: 86, noise: 76, transit: 58, center: 88, crime: 96, registry: 82 },
+    weights: { parks: 58, groceries: 62, noise: 76, transit: 58, center: 88, crime: 96, registry: 82 },
   },
   {
     id: 'quiet',
     label: 'Quiet premium',
-    weights: { parks: 64, groceries: 64, noise: 100, transit: 38, center: 64, crime: 100, registry: 88 },
+    weights: { parks: 64, groceries: 48, noise: 100, transit: 38, center: 64, crime: 100, registry: 88 },
   },
   {
     id: 'carfree',
     label: 'Car-free',
-    weights: { parks: 50, groceries: 92, noise: 70, transit: 96, center: 98, crime: 88, registry: 74 },
+    weights: { parks: 50, groceries: 76, noise: 70, transit: 96, center: 98, crime: 88, registry: 74 },
   },
   {
     id: 'family',
     label: 'Family',
-    weights: { parks: 84, groceries: 86, noise: 90, transit: 48, center: 58, crime: 100, registry: 100 },
+    weights: { parks: 84, groceries: 68, noise: 90, transit: 48, center: 58, crime: 100, registry: 100 },
   },
   {
     id: 'investor',
     label: 'Investor',
-    weights: { parks: 46, groceries: 78, noise: 72, transit: 86, center: 106, crime: 92, registry: 80 },
+    weights: { parks: 46, groceries: 58, noise: 72, transit: 86, center: 106, crime: 92, registry: 80 },
   },
 ]
 

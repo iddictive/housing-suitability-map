@@ -535,6 +535,9 @@ const normalizeRing = (points: LatLng[]) => {
   return points
 }
 
+const isClosedRing = (points: LatLng[]) =>
+  points.length > 3 && sameLatLng(points[0], points[points.length - 1])
+
 const stitchRings = (segments: LatLng[][]) => {
   const remaining = segments.map((segment) => [...segment])
   const rings: LatLng[][] = []
@@ -571,9 +574,8 @@ const stitchRings = (segments: LatLng[][]) => {
       }
     }
 
-    const normalizedRing = normalizeRing(ring)
-
-    if (normalizedRing.length >= 3) {
+    if (isClosedRing(ring)) {
+      const normalizedRing = normalizeRing(ring)
       rings.push(normalizedRing)
     }
   }
@@ -585,7 +587,7 @@ const ringsFromOverpassElement = (element: OverpassElement) => {
   if (
     element.geometry &&
     element.geometry.length >= 4 &&
-    sameLatLng(overpassPointToLatLng(element.geometry[0]), overpassPointToLatLng(element.geometry[element.geometry.length - 1]))
+    isClosedRing(element.geometry.map(overpassPointToLatLng))
   ) {
     return [normalizeRing(element.geometry.map(overpassPointToLatLng))]
   }
@@ -598,6 +600,28 @@ const ringsFromOverpassElement = (element: OverpassElement) => {
   return stitchRings(memberSegments)
 }
 
+const HARD_WATER_VALUES = new Set([
+  'basin',
+  'canal',
+  'dock',
+  'lagoon',
+  'lake',
+  'moat',
+  'oxbow',
+  'pond',
+  'reflecting_pool',
+  'reservoir',
+  'river',
+  'stream_pool',
+])
+
+const SURFACE_WATERWAYS = new Set(['canal', 'dock', 'river', 'riverbank'])
+
+const isCoveredOrUnderground = (tags: Record<string, string>) =>
+  tags.location === 'underground' ||
+  tags.covered === 'yes' ||
+  (tags.tunnel !== undefined && tags.tunnel !== 'no')
+
 const landPenaltyTemplateFromTags = (
   tags: Record<string, string>,
 ): Pick<LandPenaltyArea, 'kind' | 'maxScore'> | null => {
@@ -607,11 +631,8 @@ const landPenaltyTemplateFromTags = (
     tags.natural === 'strait' ||
     tags.place === 'sea' ||
     tags.place === 'ocean' ||
-    tags.water !== undefined ||
-    tags.waterway === 'river' ||
-    tags.waterway === 'riverbank' ||
-    tags.waterway === 'dock' ||
-    tags.waterway === 'canal' ||
+    (tags.water !== undefined && HARD_WATER_VALUES.has(tags.water)) ||
+    (SURFACE_WATERWAYS.has(tags.waterway ?? '') && !isCoveredOrUnderground(tags)) ||
     tags.landuse === 'reservoir' ||
     tags.landuse === 'basin'
 
@@ -706,7 +727,7 @@ const landPenaltyTemplateFromTags = (
   ) {
     return {
       kind: 'open-space',
-      maxScore: 0,
+      maxScore: 0.48,
     }
   }
 
@@ -1260,7 +1281,7 @@ const grocerySupplyDetail = (
   return {
     nearbyCount,
     nearestDistance,
-    score: clamp(weightedSupply / 5),
+    score: clamp(weightedSupply / 7.5),
     weightedSupply,
   }
 }
@@ -1385,9 +1406,6 @@ const buildSpatialFactorField = (
   const overlayExclusionAreas = [
     ...landPenaltyAreas
       .filter((area) => area.kind === 'water' && area.points.length >= 3)
-      .map((area) => area.points),
-    ...landPenaltyAreas
-      .filter((area) => area.kind === 'open-space' && area.points.length >= 3)
       .map((area) => area.points),
     ...poisByCategory.parks
       .filter((park) => park.points && park.points.length >= 3)
@@ -1627,7 +1645,7 @@ const buildSpatialFactorField = (
           roadMaskByCell[index] = 1
           landProxySeedMaskByCell[index] = 1
         } else if (area.kind === 'open-space') {
-          overlayExclusionMaskByCell[index] = 1
+          landProxySeedMaskByCell[index] = 1
         } else {
           overlayInclusionMaskByCell[index] = 1
           landProxySeedMaskByCell[index] = 1
