@@ -26,6 +26,8 @@ export type CityConfig = {
   state: string
   city: string
   bounds: MapBounds
+  dataBounds?: MapBounds
+  boundaryAreas?: Array<{ points: LatLng[]; holes?: LatLng[][] }>
   center: LatLng
   scoreCenter?: LatLng
   checkpoints: Array<LatLng & { name: string }>
@@ -86,6 +88,7 @@ export type LandPenaltyArea = {
     | 'civic'
     | 'cemetery'
   points: LatLng[]
+  holes?: LatLng[][]
   maxScore: number
   isLinear?: boolean
   bufferMeters?: number
@@ -260,9 +263,10 @@ export type SuitabilityField = {
   noGoMaskByCell: Uint8Array
   overlayInclusionMaskByCell: Uint8Array
   overlayExclusionMaskByCell: Uint8Array
+  cityBoundaryMaskByCell: Uint8Array
   landProxySeedMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
-  overlayExclusionAreas: LatLng[][]
+  overlayExclusionAreas: Array<{ points: LatLng[]; holes?: LatLng[][] }>
   overlayExclusionLines: Array<{ points: LatLng[]; bufferMeters: number; kind: 'road' | 'water' }>
   noGoOverlayAreas: LatLng[][]
   averageScore: number

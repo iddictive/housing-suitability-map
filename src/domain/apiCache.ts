@@ -2,7 +2,9 @@ import { API_CACHE_TTL_MS, API_CACHE_VERSION, ZONE_SNAPSHOT_TTL_MS } from './con
 import type { CityConfig, MapBounds, OverpassElement } from './types'
 
 const memoryApiCache = new Map<string, unknown>()
-let overpassRequestQueue = Promise.resolve()
+let activeOverpassRequests = 0
+const overpassRequestQueue: Array<() => void> = []
+let nextOverpassEndpointIndex = 0
 
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -10,6 +12,8 @@ const OVERPASS_ENDPOINTS = [
 ]
 
 const OVERPASS_TIMEOUT_MS = 65_000
+const OVERPASS_CONCURRENCY = 2
+const OVERPASS_START_DELAY_MS = 180
 
 const apiCacheKey = (key: string) => `${API_CACHE_VERSION}:${key}`
 
@@ -132,10 +136,105 @@ export const writeZoneSnapshot = <T,>(key: string, value: T) => {
   writeApiCache(key, value, ZONE_SNAPSHOT_TTL_MS)
 }
 
-const wait = (milliseconds: number) =>
-  new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, milliseconds)
+const wait = (milliseconds: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+
+    const timeoutId = globalThis.setTimeout(() => {
+      signal?.removeEventListener('abort', abort)
+      resolve()
+    }, milliseconds)
+    const abort = () => {
+      globalThis.clearTimeout(timeoutId)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+
+    signal?.addEventListener('abort', abort, { once: true })
   })
+
+const releaseOverpassSlot = () => {
+  activeOverpassRequests = Math.max(0, activeOverpassRequests - 1)
+  const next = overpassRequestQueue.shift()
+
+  if (next) {
+    queueMicrotask(next)
+  }
+}
+
+const acquireOverpassSlot = (signal: AbortSignal) =>
+  new Promise<() => void>((resolve, reject) => {
+    let queueEntry: (() => void) | null = null
+
+    const rejectAbort = () => reject(new DOMException('Aborted', 'AbortError'))
+    const abortWhileQueued = () => {
+      if (queueEntry) {
+        const queueIndex = overpassRequestQueue.indexOf(queueEntry)
+
+        if (queueIndex >= 0) {
+          overpassRequestQueue.splice(queueIndex, 1)
+        }
+
+        queueEntry = null
+      }
+
+      rejectAbort()
+    }
+
+    const begin = () => {
+      queueEntry = null
+      signal.removeEventListener('abort', abortWhileQueued)
+
+      if (signal.aborted) {
+        rejectAbort()
+        return
+      }
+
+      activeOverpassRequests += 1
+      let released = false
+      const release = () => {
+        if (released) {
+          return
+        }
+
+        released = true
+        releaseOverpassSlot()
+      }
+
+      wait(OVERPASS_START_DELAY_MS, signal)
+        .then(() => resolve(release))
+        .catch((error) => {
+          release()
+          reject(error)
+        })
+    }
+
+    if (signal.aborted) {
+      rejectAbort()
+      return
+    }
+
+    if (activeOverpassRequests < OVERPASS_CONCURRENCY) {
+      begin()
+      return
+    }
+
+    queueEntry = begin
+    signal.addEventListener('abort', abortWhileQueued, { once: true })
+    overpassRequestQueue.push(begin)
+  })
+
+const orderedOverpassEndpoints = () => {
+  const startIndex = nextOverpassEndpointIndex % OVERPASS_ENDPOINTS.length
+  nextOverpassEndpointIndex += 1
+
+  return [
+    ...OVERPASS_ENDPOINTS.slice(startIndex),
+    ...OVERPASS_ENDPOINTS.slice(0, startIndex),
+  ]
+}
 
 const fetchWithTimeout = async (
   url: string,
@@ -169,13 +268,17 @@ export const fetchOverpassJson = async (
   signal: AbortSignal,
   label: string,
 ): Promise<{ elements?: OverpassElement[] }> => {
-  const run = async () => {
-    await wait(850)
+  const release = await acquireOverpassSlot(signal)
+
+  try {
+    if (signal.aborted) {
+      throw new DOMException('Aborted', 'AbortError')
+    }
 
     let lastError: unknown = null
     let lastPayload: { elements?: OverpassElement[] } | null = null
 
-    for (const endpoint of OVERPASS_ENDPOINTS) {
+    for (const endpoint of orderedOverpassEndpoints()) {
       try {
         const response = await fetchWithTimeout(
           endpoint,
@@ -198,7 +301,7 @@ export const fetchOverpassJson = async (
         lastPayload = payload
 
         if ((payload.elements ?? []).length === 0) {
-          await wait(300)
+          await wait(300, signal)
           continue
         }
 
@@ -209,7 +312,7 @@ export const fetchOverpassJson = async (
         }
 
         lastError = error
-        await wait(300)
+        await wait(300, signal)
       }
     }
 
@@ -218,13 +321,7 @@ export const fetchOverpassJson = async (
     }
 
     throw lastError instanceof Error ? lastError : new Error(`Overpass ${label} unavailable`)
+  } finally {
+    release()
   }
-  const result = overpassRequestQueue.then(run, run)
-
-  overpassRequestQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-
-  return result
 }

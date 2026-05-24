@@ -54,7 +54,6 @@ import {
   MAJOR_ROAD_HARD_NOISE_METERS,
   MAJOR_ROAD_SOFT_NOISE_METERS,
   METERS_PER_DEGREE_LAT,
-  PARK_SCORE_FLOOR,
   RAIL_HARD_NOISE_METERS,
   RAIL_SOFT_NOISE_METERS,
   REGION_OPTIONS,
@@ -204,6 +203,10 @@ type NominatimPlace = {
   type?: string
   address?: Record<string, string | undefined>
   boundingbox?: [string, string, string, string]
+  geojson?: {
+    type?: string
+    coordinates?: unknown
+  }
 }
 
 type ResidentialEvidenceField = {
@@ -234,6 +237,63 @@ const isCityLevelPlace = (place: NominatimPlace) => {
   )
 }
 
+const latLngFromGeoJsonPosition = (position: unknown): LatLng | null => {
+  if (!Array.isArray(position) || position.length < 2) {
+    return null
+  }
+
+  const lng = Number(position[0])
+  const lat = Number(position[1])
+
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
+}
+
+const latLngRingFromGeoJsonRing = (ring: unknown): LatLng[] => {
+  if (!Array.isArray(ring)) {
+    return []
+  }
+
+  const points = ring
+    .map(latLngFromGeoJsonPosition)
+    .filter((point): point is LatLng => Boolean(point))
+
+  return normalizeRing(points)
+}
+
+const cityBoundaryAreasFromGeoJson = (geojson: NominatimPlace['geojson']) => {
+  if (!geojson?.coordinates) {
+    return []
+  }
+
+  const polygons =
+    geojson.type === 'Polygon'
+      ? [geojson.coordinates]
+      : geojson.type === 'MultiPolygon' && Array.isArray(geojson.coordinates)
+        ? geojson.coordinates
+        : []
+
+  return polygons
+    .map((polygon) => {
+      if (!Array.isArray(polygon)) {
+        return null
+      }
+
+      const [outerRing, ...innerRings] = polygon
+      const points = latLngRingFromGeoJsonRing(outerRing)
+
+      if (points.length < 3) {
+        return null
+      }
+
+      const holes = innerRings
+        .map(latLngRingFromGeoJsonRing)
+        .filter((hole) => hole.length >= 3)
+
+      return { points, holes }
+    })
+    .filter((area): area is { points: LatLng[]; holes: LatLng[][] } => Boolean(area))
+}
+
 const cityConfigFromNominatimPlace = (
   place: NominatimPlace,
   region: RegionOption,
@@ -256,10 +316,21 @@ const cityConfigFromNominatimPlace = (
     east: lng + 0.035,
   }
   const center = { lat, lng }
-  const safeBounds = limitBoundsAroundCenter(
-    Object.values(bounds).every(Number.isFinite) ? bounds : fallbackBounds,
-    center,
-  )
+  const boundaryAreas = cityBoundaryAreasFromGeoJson(place.geojson)
+  const hasFiniteBounds = Object.values(bounds).every(Number.isFinite)
+  const cityLatSpan = bounds.north - bounds.south
+  const cityLngSpan = bounds.east - bounds.west
+  const canUseBoundaryBounds =
+    boundaryAreas.length > 0 &&
+    hasFiniteBounds &&
+    cityLatSpan > 0 &&
+    cityLngSpan > 0 &&
+    cityLatSpan <= 0.9 &&
+    cityLngSpan <= 1.2
+  const limitedBounds = limitBoundsAroundCenter(hasFiniteBounds ? bounds : fallbackBounds, center)
+  const safeBounds = canUseBoundaryBounds
+    ? bounds
+    : limitedBounds
 
   return {
     id: `${idPrefix}-${region.code}-${slugifyFilePart(label)}`,
@@ -267,6 +338,8 @@ const cityConfigFromNominatimPlace = (
     state: region.code,
     city: label,
     bounds: safeBounds,
+    dataBounds: canUseBoundaryBounds ? limitedBounds : undefined,
+    boundaryAreas: boundaryAreas.length > 0 ? boundaryAreas : undefined,
     center,
     checkpoints: genericCityCheckpoints(label, safeBounds, center),
   }
@@ -295,9 +368,10 @@ const fetchCityConfig = async (regionCode: string, cityName: string): Promise<Ci
 
   const searchParams = new URLSearchParams({
     format: 'jsonv2',
-    limit: '1',
+    limit: '5',
     countrycodes: region.countryCode,
     addressdetails: '1',
+    polygon_geojson: '1',
     q: citySearchQuery(city, region),
   })
   const cacheKey = `geocode:${region.code}:${city.toLowerCase()}`
@@ -372,9 +446,9 @@ const buildOverpassQuery = (bounds: MapBounds) => {
   node["leisure"="park"](${bbox});
   way["leisure"="park"](${bbox});
   relation["leisure"="park"](${bbox});
-  node["shop"~"^(supermarket|grocery|greengrocer)$"](${bbox});
-  way["shop"~"^(supermarket|grocery|greengrocer)$"](${bbox});
-  relation["shop"~"^(supermarket|grocery|greengrocer)$"](${bbox});
+  node["shop"~"^(supermarket|grocery|greengrocer|convenience)$"](${bbox});
+  way["shop"~"^(supermarket|grocery|greengrocer|convenience)$"](${bbox});
+  relation["shop"~"^(supermarket|grocery|greengrocer|convenience)$"](${bbox});
   node["amenity"~"^(bar|pub|nightclub|music_venue)$"](${bbox});
   way["amenity"~"^(bar|pub|nightclub|music_venue)$"](${bbox});
   node["leisure"="nightclub"](${bbox});
@@ -383,10 +457,10 @@ const buildOverpassQuery = (bounds: MapBounds) => {
   node["railway"~"^(station|subway_entrance|tram_stop)$"](${bbox});
   way["railway"="station"](${bbox});
 );
-out center geom tags;`
+out center geom;`
 }
 
-const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
+const buildTransportMaskQuery = (bounds: MapBounds) => {
   const bbox = boundsToBbox(bounds)
 
   return `
@@ -396,6 +470,18 @@ const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
   way["railway"~"^(rail|light_rail|subway)$"](${bbox});
   way["aeroway"~"^(runway|taxiway|apron|aerodrome)$"](${bbox});
   relation["aeroway"~"^(runway|taxiway|apron|aerodrome)$"](${bbox});
+  way["railway"~"^(yard|station)$"](${bbox});
+  relation["railway"~"^(yard|station)$"](${bbox});
+);
+out geom;`
+}
+
+const buildWaterMaskQuery = (bounds: MapBounds) => {
+  const bbox = boundsToBbox(bounds)
+
+  return `
+[out:json][timeout:35];
+(
   way["natural"~"^(water|bay|strait)$"](${bbox});
   relation["natural"~"^(water|bay|strait)$"](${bbox});
   way["place"~"^(sea|ocean)$"](${bbox});
@@ -406,8 +492,16 @@ const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
   relation["waterway"~"^(river|riverbank|dock|canal)$"](${bbox});
   way["landuse"~"^(reservoir|basin)$"](${bbox});
   relation["landuse"~"^(reservoir|basin)$"](${bbox});
-  way["railway"~"^(yard|station)$"](${bbox});
-  relation["railway"~"^(yard|station)$"](${bbox});
+);
+out geom;`
+}
+
+const buildLandMaskQuery = (bounds: MapBounds) => {
+  const bbox = boundsToBbox(bounds)
+
+  return `
+[out:json][timeout:45];
+(
   way["landuse"~"^(railway|industrial|commercial|retail|cemetery)$"](${bbox});
   relation["landuse"~"^(railway|industrial|commercial|retail|cemetery)$"](${bbox});
   way["landuse"~"^(residential|allotments|education|institutional|recreation_ground|village_green)$"](${bbox});
@@ -425,7 +519,7 @@ const buildNoiseSegmentsQuery = (bounds: MapBounds) => {
   way["amenity"~"^(school|university|college|hospital|grave_yard)$"](${bbox});
   relation["amenity"~"^(school|university|college|hospital|grave_yard)$"](${bbox});
 );
-out geom tags;`
+out geom;`
 }
 
 const buildBuildingLevelsQuery = (bounds: MapBounds) => {
@@ -440,12 +534,53 @@ const buildBuildingLevelsQuery = (bounds: MapBounds) => {
 out center tags;`
 }
 
+const GROCERY_SHOP_VALUES = new Set(['supermarket', 'grocery', 'greengrocer', 'convenience'])
+const ALCOHOL_SHOP_VALUES = new Set(['alcohol', 'wine', 'beverages'])
+const ALCOHOL_NAME_MARKERS = [
+  'alcohol',
+  'liquor',
+  'wine',
+  'beer',
+  'craft beer',
+  'spirits',
+  'vodka',
+  'whisky',
+  'whiskey',
+  'красное&белое',
+  'красное & белое',
+  'красное и белое',
+  'винлаб',
+  'winelab',
+  'бристоль',
+  'ароматный мир',
+  'алко',
+  'алкомаркет',
+  'алкоголь',
+  'вино',
+  'винный',
+  'пиво',
+  'пивной',
+  'пивная',
+  'разливное',
+]
+
+const isGroceryShop = (tags: Record<string, string> = {}) => {
+  const shop = tags.shop ?? ''
+  const name = [tags.name, tags.brand, tags.operator].filter(Boolean).join(' ').toLowerCase()
+
+  if (ALCOHOL_SHOP_VALUES.has(shop) || ALCOHOL_NAME_MARKERS.some((marker) => name.includes(marker))) {
+    return false
+  }
+
+  return GROCERY_SHOP_VALUES.has(shop)
+}
+
 const categoryFromTags = (tags: Record<string, string> = {}): PoiCategory | null => {
   if (tags.leisure === 'park') {
     return 'parks'
   }
 
-  if (['supermarket', 'grocery', 'greengrocer'].includes(tags.shop ?? '')) {
+  if (isGroceryShop(tags)) {
     return 'groceries'
   }
 
@@ -584,20 +719,39 @@ const stitchRings = (segments: LatLng[][]) => {
 }
 
 const ringsFromOverpassElement = (element: OverpassElement) => {
+  return polygonAreasFromOverpassElement(element).map((area) => area.points)
+}
+
+const pointInLatLngRing = (point: LatLng, ring: LatLng[]) =>
+  pointInPolygon(
+    point.lng,
+    point.lat,
+    ring.map((ringPoint) => ({ x: ringPoint.lng, y: ringPoint.lat })),
+  )
+
+const polygonAreasFromOverpassElement = (element: OverpassElement) => {
   if (
     element.geometry &&
     element.geometry.length >= 4 &&
     isClosedRing(element.geometry.map(overpassPointToLatLng))
   ) {
-    return [normalizeRing(element.geometry.map(overpassPointToLatLng))]
+    return [{ points: normalizeRing(element.geometry.map(overpassPointToLatLng)), holes: [] }]
   }
 
-  const memberSegments =
+  const outerSegments =
     element.members
       ?.filter((member) => member.role !== 'inner' && member.geometry && member.geometry.length >= 2)
       .map((member) => member.geometry?.map(overpassPointToLatLng) ?? []) ?? []
+  const innerSegments =
+    element.members
+      ?.filter((member) => member.role === 'inner' && member.geometry && member.geometry.length >= 2)
+      .map((member) => member.geometry?.map(overpassPointToLatLng) ?? []) ?? []
+  const innerRings = stitchRings(innerSegments)
 
-  return stitchRings(memberSegments)
+  return stitchRings(outerSegments).map((points) => ({
+    points,
+    holes: innerRings.filter((hole) => hole[0] && pointInLatLngRing(hole[0], points)),
+  }))
 }
 
 const HARD_WATER_VALUES = new Set([
@@ -787,7 +941,7 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
     ]
   }
 
-  return ringsFromOverpassElement(element).map((points, index) => ({
+  return polygonAreasFromOverpassElement(element).map((area, index) => ({
     id: `${element.type}-${element.id}-${index}`,
     name:
       tags.name ??
@@ -798,7 +952,8 @@ const elementToLandPenaltyAreas = (element: OverpassElement): LandPenaltyArea[] 
       tags.natural ??
       template.kind,
     kind: template.kind,
-    points,
+    points: area.points,
+    holes: area.holes,
     maxScore: template.maxScore,
   }))
 }
@@ -921,13 +1076,31 @@ const fetchPois = async (signal: AbortSignal, bounds: MapBounds, force = false) 
 }
 
 const fetchNoiseSegments = async (signal: AbortSignal, bounds: MapBounds, force = false) => {
-  const payload = await cachedRequest<{ elements?: OverpassElement[] }>(
-    `masks-noise:${boundsCachePart(bounds)}`,
-    () => fetchOverpassJson(buildNoiseSegmentsQuery(bounds), signal, 'noise'),
-    { force },
+  const boundsKey = boundsCachePart(bounds)
+  const payloadResults = await Promise.allSettled([
+    cachedRequest<{ elements?: OverpassElement[] }>(
+      `masks-transport:${boundsKey}`,
+      () => fetchOverpassJson(buildTransportMaskQuery(bounds), signal, 'transport masks'),
+      { force },
+    ),
+    cachedRequest<{ elements?: OverpassElement[] }>(
+      `masks-water:${boundsKey}`,
+      () => fetchOverpassJson(buildWaterMaskQuery(bounds), signal, 'water masks'),
+      { force },
+    ),
+    cachedRequest<{ elements?: OverpassElement[] }>(
+      `masks-land:${boundsKey}`,
+      () => fetchOverpassJson(buildLandMaskQuery(bounds), signal, 'land masks'),
+      { force },
+    ),
+  ])
+  const elements = payloadResults.flatMap((result) =>
+    result.status === 'fulfilled' ? (result.value.elements ?? []) : [],
   )
 
-  const elements = payload.elements ?? []
+  if (elements.length === 0 && payloadResults.every((result) => result.status === 'rejected')) {
+    throw new Error('OSM masks unavailable')
+  }
 
   return {
     segments: elements
@@ -1211,7 +1384,7 @@ const projectPoi = (
 
 const parkInfluenceScore = (x: number, y: number, parks: ProjectedPoi[], criterion: Criterion) => {
   if (parks.length === 0) {
-    return PARK_SCORE_FLOOR
+    return 0
   }
 
   let bestScore = 0
@@ -1229,7 +1402,34 @@ const parkInfluenceScore = (x: number, y: number, parks: ProjectedPoi[], criteri
     }
   }
 
-  return PARK_SCORE_FLOOR + bestScore * (1 - PARK_SCORE_FLOOR)
+  return clamp(bestScore)
+}
+
+const projectedPointBounds = (points: Array<{ x: number; y: number }>) => {
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+
+  for (const point of points) {
+    if (point.x < minX) {
+      minX = point.x
+    }
+
+    if (point.x > maxX) {
+      maxX = point.x
+    }
+
+    if (point.y < minY) {
+      minY = point.y
+    }
+
+    if (point.y > maxY) {
+      maxY = point.y
+    }
+  }
+
+  return { minX, maxX, minY, maxY }
 }
 
 const grocerySupplyWeight = (grocery: Pick<ProjectedPoi, 'areaSqm' | 'shopKind'>) => {
@@ -1352,6 +1552,7 @@ const buildSpatialFactorField = (
   landPenaltyAreas: LandPenaltyArea[],
   trafficSegments: TrafficSegment[],
   bounds: MapBounds,
+  boundaryAreas: CityConfig['boundaryAreas'],
   centerPoint: LatLng,
   cellSizeMeters: number,
 ): SpatialFactorField => {
@@ -1375,6 +1576,7 @@ const buildSpatialFactorField = (
   const noGoMaskByCell = new Uint8Array(cellCount)
   const overlayInclusionMaskByCell = new Uint8Array(cellCount)
   const overlayExclusionMaskByCell = new Uint8Array(cellCount)
+  const cityBoundaryMaskByCell = new Uint8Array(cellCount)
   const landProxySeedMaskByCell = new Uint8Array(cellCount)
   const residentialCandidateMaskByCell = new Uint8Array(cellCount)
   const factorScores = {
@@ -1402,14 +1604,29 @@ const buildSpatialFactorField = (
     isLinear: area.isLinear,
     bufferMeters: area.bufferMeters,
     points: area.points.map(project),
+    holes: area.holes?.map((hole) => hole.map(project)) ?? [],
   }))
+  const projectedBoundaryAreas =
+    boundaryAreas?.map((area) => ({
+      points: area.points.map(project),
+      holes: area.holes?.map((hole) => hole.map(project)) ?? [],
+    })) ?? []
+  const islandLandAreas = landPenaltyAreas.filter((area) => area.kind === 'land' && area.points.length >= 3)
   const overlayExclusionAreas = [
     ...landPenaltyAreas
       .filter((area) => area.kind === 'water' && area.points.length >= 3)
-      .map((area) => area.points),
+      .map((area) => ({
+        points: area.points,
+        holes: [
+          ...(area.holes ?? []),
+          ...islandLandAreas
+            .filter((island) => island.points[0] && pointInLatLngRing(island.points[0], area.points))
+            .map((island) => island.points),
+        ],
+      })),
     ...poisByCategory.parks
       .filter((park) => park.points && park.points.length >= 3)
-      .map((park) => park.points ?? []),
+      .map((park) => ({ points: park.points ?? [] })),
   ]
   const overlayExclusionLines = landPenaltyAreas
     .filter(
@@ -1448,6 +1665,30 @@ const buildSpatialFactorField = (
 
   transportNoiseByCell.fill(1)
   landScoreCapByCell.fill(1)
+  cityBoundaryMaskByCell.fill(projectedBoundaryAreas.length > 0 ? 0 : 1)
+
+  if (projectedBoundaryAreas.length > 0) {
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < cols; column += 1) {
+        const x = column * cellSizeMeters + cellSizeMeters / 2
+        const y = row * cellSizeMeters + cellSizeMeters / 2
+        const index = row * cols + column
+        const isInsideCity = projectedBoundaryAreas.some(
+          (area) =>
+            pointInPolygon(x, y, area.points) &&
+            !area.holes.some((hole) => pointInPolygon(x, y, hole)),
+        )
+
+        if (isInsideCity) {
+          cityBoundaryMaskByCell[index] = 1
+          overlayInclusionMaskByCell[index] = 1
+        } else {
+          overlayExclusionMaskByCell[index] = 1
+          landScoreCapByCell[index] = 0
+        }
+      }
+    }
+  }
 
   for (const incident of crimeIncidents) {
     const point = project(incident)
@@ -1597,10 +1838,7 @@ const buildSpatialFactorField = (
   }
 
   for (const area of projectedLandPenaltyAreas) {
-    const minX = Math.min(...area.points.map((point) => point.x))
-    const maxX = Math.max(...area.points.map((point) => point.x))
-    const minY = Math.min(...area.points.map((point) => point.y))
-    const maxY = Math.max(...area.points.map((point) => point.y))
+    const { minX, maxX, minY, maxY } = projectedPointBounds(area.points)
     const areaBuffer = area.isLinear ? (area.bufferMeters ?? 0) : 0
     const minColumn = Math.max(0, Math.floor((minX - areaBuffer) / cellSizeMeters))
     const maxColumn = Math.min(cols - 1, Math.floor((maxX + areaBuffer) / cellSizeMeters))
@@ -1612,7 +1850,9 @@ const buildSpatialFactorField = (
         const x = column * cellSizeMeters + cellSizeMeters / 2
         const y = row * cellSizeMeters + cellSizeMeters / 2
 
-        let isInsideArea = pointInPolygon(x, y, area.points)
+        let isInsideArea =
+          pointInPolygon(x, y, area.points) &&
+          !area.holes.some((hole) => pointInPolygon(x, y, hole))
 
         if (area.isLinear) {
           isInsideArea = false
@@ -1643,10 +1883,20 @@ const buildSpatialFactorField = (
           overlayExclusionMaskByCell[index] = 1
         } else if (area.kind === 'road') {
           roadMaskByCell[index] = 1
+          overlayExclusionMaskByCell[index] = 1
           landProxySeedMaskByCell[index] = 1
         } else if (area.kind === 'open-space') {
           landProxySeedMaskByCell[index] = 1
         } else {
+          if (area.kind === 'land' && waterMaskByCell[index]) {
+            waterMaskByCell[index] = 0
+
+            if (!roadMaskByCell[index] && !noGoMaskByCell[index]) {
+              overlayExclusionMaskByCell[index] = 0
+              landScoreCapByCell[index] = Math.max(landScoreCapByCell[index], area.maxScore)
+            }
+          }
+
           overlayInclusionMaskByCell[index] = 1
           landProxySeedMaskByCell[index] = 1
 
@@ -1667,10 +1917,7 @@ const buildSpatialFactorField = (
   }
 
   for (const parkArea of projectedParkAreas) {
-    const minX = Math.min(...parkArea.map((point) => point.x))
-    const maxX = Math.max(...parkArea.map((point) => point.x))
-    const minY = Math.min(...parkArea.map((point) => point.y))
-    const maxY = Math.max(...parkArea.map((point) => point.y))
+    const { minX, maxX, minY, maxY } = projectedPointBounds(parkArea)
     const minColumn = Math.max(0, Math.floor(minX / cellSizeMeters))
     const maxColumn = Math.min(cols - 1, Math.floor(maxX / cellSizeMeters))
     const minRow = Math.max(0, Math.floor(minY / cellSizeMeters))
@@ -1751,6 +1998,7 @@ const buildSpatialFactorField = (
     noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell,
+    cityBoundaryMaskByCell,
     landProxySeedMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas,
@@ -1846,6 +2094,7 @@ const mixSuitabilityField = (
     noGoMaskByCell: spatialField.noGoMaskByCell,
     overlayInclusionMaskByCell,
     overlayExclusionMaskByCell: spatialField.overlayExclusionMaskByCell,
+    cityBoundaryMaskByCell: spatialField.cityBoundaryMaskByCell,
     landProxySeedMaskByCell: spatialField.landProxySeedMaskByCell,
     residentialCandidateMaskByCell,
     overlayExclusionAreas: spatialField.overlayExclusionAreas,
@@ -1896,6 +2145,10 @@ const buildResidentialEvidenceField = (
 
         if (Math.hypot(x - point.x, y - point.y) <= RESIDENTIAL_BUILDING_EVIDENCE_METERS) {
           const index = row * spatialField.cols + column
+
+          if (!spatialField.cityBoundaryMaskByCell[index]) {
+            continue
+          }
 
           residentialCandidateMaskByCell[index] = 1
           overlayInclusionMaskByCell[index] = 1
@@ -1990,15 +2243,22 @@ const vectorExclusionAtPoint = (
   const meters = latLngToMeters(point, bounds, field.metersPerDegreeLng)
 
   for (const area of field.overlayExclusionAreas) {
-    if (area.length < 3) {
+    if (area.points.length < 3) {
       continue
     }
 
-    const projectedArea = area.map((areaPoint) =>
+    const projectedArea = area.points.map((areaPoint) =>
       latLngToMeters(areaPoint, bounds, field.metersPerDegreeLng),
     )
+    const projectedHoles =
+      area.holes?.map((hole) =>
+        hole.map((holePoint) => latLngToMeters(holePoint, bounds, field.metersPerDegreeLng)),
+      ) ?? []
 
-    if (pointInPolygon(meters.x, meters.y, projectedArea)) {
+    if (
+      pointInPolygon(meters.x, meters.y, projectedArea) &&
+      !projectedHoles.some((hole) => pointInPolygon(meters.x, meters.y, hole))
+    ) {
       return 'area'
     }
   }
@@ -2226,12 +2486,33 @@ const landCapAtPoint = (
   metersPerDegreeLng = metersPerDegreeLngForBounds(bounds),
 ) => {
   let cap = 1
+  let waterCapApplied = false
 
   for (const area of areas) {
     const points = area.points.map((point) => latLngToMeters(point, bounds, metersPerDegreeLng))
+    const holes = area.holes?.map((hole) =>
+      hole.map((point) => latLngToMeters(point, bounds, metersPerDegreeLng)),
+    ) ?? []
 
-    if (pointInPolygon(x, y, points) && area.maxScore < cap) {
+    if (!pointInPolygon(x, y, points) || holes.some((hole) => pointInPolygon(x, y, hole))) {
+      continue
+    }
+
+    if (area.kind === 'land' && waterCapApplied) {
+      cap = Math.max(cap, area.maxScore)
+      waterCapApplied = false
+      continue
+    }
+
+    if (waterCapApplied && area.kind !== 'water') {
       cap = area.maxScore
+      waterCapApplied = false
+      continue
+    }
+
+    if (area.maxScore < cap) {
+      cap = area.maxScore
+      waterCapApplied = area.kind === 'water'
     }
   }
 
@@ -2632,7 +2913,7 @@ const SuitabilityCanvasOverlay = ({
     let canvasBounds = map.getBounds()
 
     const AREA_DETAIL_MIN_ZOOM = 12
-    const ROAD_DETAIL_MIN_ZOOM = 15
+    const ROAD_DETAIL_MIN_ZOOM = 13
 
     const draw = () => {
       if (isZooming) {
@@ -2748,13 +3029,13 @@ const SuitabilityCanvasOverlay = ({
       context.fillStyle = 'rgba(0, 0, 0, 1)'
 
       for (const area of field.overlayExclusionAreas) {
-        if (area.length < 3) {
+        if (area.points.length < 3) {
           continue
         }
 
         context.beginPath()
 
-        area.forEach((point, pointIndex) => {
+        area.points.forEach((point, pointIndex) => {
           const layerPoint = map.latLngToContainerPoint([point.lat, point.lng])
 
           if (pointIndex === 0) {
@@ -2765,7 +3046,26 @@ const SuitabilityCanvasOverlay = ({
         })
 
         context.closePath()
-        context.fill()
+
+        area.holes?.forEach((hole) => {
+          if (hole.length < 3) {
+            return
+          }
+
+          hole.forEach((point, pointIndex) => {
+            const layerPoint = map.latLngToContainerPoint([point.lat, point.lng])
+
+            if (pointIndex === 0) {
+              context.moveTo(layerPoint.x, layerPoint.y)
+            } else {
+              context.lineTo(layerPoint.x, layerPoint.y)
+            }
+          })
+
+          context.closePath()
+        })
+
+        context.fill('evenodd')
       }
 
       context.restore()
@@ -3210,9 +3510,10 @@ const App = () => {
     [availableCities, customCity, selectedCityId, selectedState],
   )
   const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
+  const activeDataBounds = useMemo(() => activeCity.dataBounds ?? activeCity.bounds, [activeCity])
   const activeZoneCacheKey = useMemo(
-    () => `${activeCity.id}:${boundsCachePart(activeCity.bounds)}`,
-    [activeCity],
+    () => `${activeCity.id}:${boundsCachePart(activeDataBounds)}`,
+    [activeCity.id, activeDataBounds],
   )
   const suggestedCityNames = useMemo(() => {
     const cityNames = new Set([
@@ -3273,7 +3574,8 @@ const App = () => {
   useEffect(() => {
     const controller = new AbortController()
     const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
-    const mainSnapshotKey = zoneSnapshotKey('main', activeCity)
+    const dataCity = { ...activeCity, bounds: activeDataBounds }
+    const mainSnapshotKey = zoneSnapshotKey('main', dataCity)
     const hasBostonCrime = supportsBostonCrimeData(activeCity)
     const hasMassDotTraffic = supportsMassDotTrafficData(activeCity)
     const hasLocalRegistryRisk = supportsLocalRegistryRiskData(activeCity)
@@ -3328,6 +3630,16 @@ const App = () => {
         }
       }
 
+      setPois([])
+      setCrimeIncidents([])
+      setRegistryRiskPoints([])
+      setNoiseSegments([])
+      setLandPenaltyAreas([])
+      setTrafficSegments([])
+      setDataMode('sample')
+      setCrimeDataMode('empty')
+      setRegistryDataMode('empty')
+      setError(null)
       setIsLoading(true)
       setLoadStage('osm', { status: 'loading', count: undefined, detail: 'amenities + parks' })
       setLoadStage('crime', {
@@ -3348,18 +3660,208 @@ const App = () => {
       })
     })
 
+    const poisPromise = fetchPois(controller.signal, activeDataBounds, forceRefresh)
+    const crimePromise = hasBostonCrime
+      ? fetchCrimeIncidents(controller.signal, activeDataBounds, forceRefresh)
+      : Promise.resolve([])
+    const registryPromise = hasLocalRegistryRisk
+      ? fetchRegistryRiskPoints(controller.signal, activeDataBounds, forceRefresh)
+      : Promise.resolve([])
+    const noisePromise = fetchNoiseSegments(controller.signal, activeDataBounds, forceRefresh)
+    const trafficPromise = hasMassDotTraffic
+      ? fetchTrafficSegments(controller.signal, activeDataBounds, forceRefresh)
+      : Promise.resolve([])
+    let osmTrafficProxy: TrafficSegment[] = []
+    let hasLiveTraffic = false
+
+    poisPromise
+      .then((nextPois) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        const nextDataMode: DataMode = nextPois.length > 0 ? 'live' : 'sample'
+
+        setPois(nextPois.length > 0 ? nextPois : activeCity.id === 'ma-boston' ? FALLBACK_POIS : [])
+        setDataMode(nextDataMode)
+        setLoadStage('osm', {
+          status: nextPois.length > 0 ? 'live' : activeCity.id === 'ma-boston' ? 'partial' : 'empty',
+          count: nextPois.length,
+          detail: nextPois.length > 0 ? 'loaded' : activeCity.id === 'ma-boston' ? 'fallback' : 'no amenities',
+        })
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        const fallbackPois = activeCity.id === 'ma-boston' ? FALLBACK_POIS : []
+
+        setPois(fallbackPois)
+        setDataMode('sample')
+        setLoadStage('osm', {
+          status: fallbackPois.length > 0 ? 'partial' : 'error',
+          count: fallbackPois.length,
+          detail: fallbackPois.length > 0 ? 'fallback' : 'unavailable',
+        })
+      })
+
+    crimePromise
+      .then((nextCrimeIncidents) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setCrimeIncidents(nextCrimeIncidents)
+        setCrimeDataMode(nextCrimeIncidents.length > 0 ? 'live' : 'empty')
+        setLoadStage('crime', {
+          status: nextCrimeIncidents.length > 0 ? 'live' : 'empty',
+          count: nextCrimeIncidents.length,
+          detail:
+            nextCrimeIncidents.length > 0
+              ? 'loaded'
+              : hasBostonCrime
+                ? 'Boston only'
+                : activeCity.countryCode === 'us'
+                  ? 'Boston only'
+                  : 'unsupported',
+        })
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setCrimeIncidents([])
+        setCrimeDataMode('empty')
+        setLoadStage('crime', { status: 'error', count: 0, detail: 'unavailable' })
+      })
+
+    registryPromise
+      .then((nextRegistryRiskPoints) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setRegistryRiskPoints(nextRegistryRiskPoints)
+        setRegistryDataMode(nextRegistryRiskPoints.length > 0 ? 'live' : 'empty')
+        setLoadStage('registry', {
+          status: nextRegistryRiskPoints.length > 0 ? 'live' : 'empty',
+          count: nextRegistryRiskPoints.length,
+          detail:
+            nextRegistryRiskPoints.length > 0
+              ? 'loaded'
+              : hasLocalRegistryRisk
+                ? 'no local points'
+                : 'unsupported',
+        })
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setRegistryRiskPoints([])
+        setRegistryDataMode('empty')
+        setLoadStage('registry', { status: 'error', count: 0, detail: 'unavailable' })
+      })
+
+    noisePromise
+      .then((nextNoise) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setNoiseSegments(nextNoise.segments)
+        setLandPenaltyAreas(nextNoise.areas)
+        setLoadStage('noise', {
+          status: nextNoise.segments.length > 0 || nextNoise.areas.length > 0 ? 'live' : 'empty',
+          count: nextNoise.segments.length,
+          detail: `${nextNoise.areas.length} caps`,
+        })
+
+        osmTrafficProxy = trafficSegmentsFromOsmRoads(nextNoise.segments)
+
+        if (!hasLiveTraffic) {
+          setTrafficSegments(osmTrafficProxy)
+          setLoadStage('traffic', {
+            status: osmTrafficProxy.length > 0 ? 'partial' : hasMassDotTraffic ? 'loading' : 'empty',
+            count: osmTrafficProxy.length,
+            detail:
+              osmTrafficProxy.length > 0
+                ? 'OSM proxy'
+                : hasMassDotTraffic
+                  ? 'MassDOT AADT'
+                  : 'no roads',
+          })
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setNoiseSegments([])
+        setLandPenaltyAreas([])
+        setLoadStage('noise', { status: 'error', count: 0, detail: 'unavailable' })
+      })
+
+    trafficPromise
+      .then((nextTrafficSegments) => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        hasLiveTraffic = nextTrafficSegments.length > 0
+
+        if (hasLiveTraffic) {
+          setTrafficSegments(nextTrafficSegments)
+          setLoadStage('traffic', {
+            status: 'live',
+            count: nextTrafficSegments.length,
+            detail: hasMassDotTraffic ? 'loaded' : 'no roads',
+          })
+        } else if (osmTrafficProxy.length > 0) {
+          setTrafficSegments(osmTrafficProxy)
+          setLoadStage('traffic', {
+            status: 'partial',
+            count: osmTrafficProxy.length,
+            detail: 'OSM proxy',
+          })
+        } else {
+          setTrafficSegments([])
+          setLoadStage('traffic', {
+            status: hasMassDotTraffic ? 'loading' : 'empty',
+            count: 0,
+            detail: hasMassDotTraffic ? 'MassDOT AADT' : 'no roads',
+          })
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        if (osmTrafficProxy.length > 0) {
+          setTrafficSegments(osmTrafficProxy)
+          setLoadStage('traffic', {
+            status: 'partial',
+            count: osmTrafficProxy.length,
+            detail: 'OSM proxy',
+          })
+          return
+        }
+
+        setTrafficSegments([])
+        setLoadStage('traffic', { status: 'error', count: 0, detail: 'unavailable' })
+      })
+
     Promise.allSettled([
-      fetchPois(controller.signal, activeCity.bounds, forceRefresh),
-      hasBostonCrime
-        ? fetchCrimeIncidents(controller.signal, activeCity.bounds, forceRefresh)
-        : Promise.resolve([]),
-      hasLocalRegistryRisk
-        ? fetchRegistryRiskPoints(controller.signal, activeCity.bounds, forceRefresh)
-        : Promise.resolve([]),
-      fetchNoiseSegments(controller.signal, activeCity.bounds, forceRefresh),
-      hasMassDotTraffic
-        ? fetchTrafficSegments(controller.signal, activeCity.bounds, forceRefresh)
-        : Promise.resolve([]),
+      poisPromise,
+      crimePromise,
+      registryPromise,
+      noisePromise,
+      trafficPromise,
     ])
       .then(([poiResult, crimeResult, registryResult, noiseResult, trafficResult]) => {
         if (controller.signal.aborted) {
@@ -3527,13 +4029,14 @@ const App = () => {
       })
 
     return () => controller.abort()
-  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
+  }, [activeCity, activeDataBounds, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
 
   useEffect(() => {
     const controller = new AbortController()
     let isCurrent = true
     const forceRefresh = forceRefreshZoneKey === activeZoneCacheKey
-    const buildingSnapshotKey = zoneSnapshotKey('buildings', activeCity)
+    const dataCity = { ...activeCity, bounds: activeDataBounds }
+    const buildingSnapshotKey = zoneSnapshotKey('buildings', dataCity)
 
     Promise.resolve()
       .then(() => {
@@ -3579,7 +4082,7 @@ const App = () => {
           setLoadStage('buildings', { status: 'loading', count: undefined, detail: 'force refresh' })
         }
 
-        return fetchBuildingFootprints(controller.signal, activeCity.bounds, forceRefresh)
+        return fetchBuildingFootprints(controller.signal, activeDataBounds, forceRefresh)
       })
       .then((result) => {
         if (controller.signal.aborted || !isCurrent) {
@@ -3647,7 +4150,7 @@ const App = () => {
       isCurrent = false
       controller.abort()
     }
-  }, [activeCity, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
+  }, [activeCity, activeDataBounds, activeZoneCacheKey, forceRefreshZoneKey, refreshToken, setLoadStage])
 
   const refreshData = useCallback(() => {
     setIsLoading(true)
@@ -3715,6 +4218,7 @@ const App = () => {
         landPenaltyAreas,
         trafficSegments,
         activeCity.bounds,
+        activeCity.boundaryAreas,
         scoreCenterForCity(activeCity),
         deferredCellSizeMeters,
       ),
