@@ -153,7 +153,7 @@ export type Criterion = {
   enabled: boolean
   weight: number
   thresholdKm: number
-  mode: 'nearIsGood' | 'farIsGood' | 'belowAverageIsGood'
+  mode: 'nearIsGood' | 'farIsGood' | 'belowAverageIsGood' | 'centerAccess'
 }
 
 export type EvaluationProfile = {

@@ -1152,6 +1152,26 @@ const scoreByDistance = (distance: number, criterion: Criterion) => {
     return 0.5
   }
 
+  if (criterion.mode === 'centerAccess') {
+    if (distance <= 1.5) {
+      return 1
+    }
+
+    if (distance <= 3) {
+      return 1 - ((distance - 1.5) / 1.5) * 0.28
+    }
+
+    if (distance <= 6) {
+      return 0.72 - ((distance - 3) / 3) * 0.42
+    }
+
+    if (distance <= criterion.thresholdKm) {
+      return 0.3 - ((distance - 6) / Math.max(1, criterion.thresholdKm - 6)) * 0.2
+    }
+
+    return Math.max(0, 0.1 * (1 - (distance - criterion.thresholdKm) / 8))
+  }
+
   const normalized = clamp(distance / criterion.thresholdKm)
 
   return criterion.mode === 'nearIsGood' ? 1 - normalized : normalized

@@ -300,7 +300,7 @@ export const INITIAL_CRITERIA: Criterion[] = [
   { id: 'groceries', label: 'Groceries', enabled: true, weight: 86, thresholdKm: 1, mode: 'nearIsGood' },
   { id: 'noise', label: 'Noise', enabled: true, weight: 76, thresholdKm: 1.15, mode: 'farIsGood' },
   { id: 'transit', label: 'Transit', enabled: true, weight: 58, thresholdKm: 0.9, mode: 'nearIsGood' },
-  { id: 'center', label: 'Center', enabled: true, weight: 42, thresholdKm: 8, mode: 'nearIsGood' },
+  { id: 'center', label: 'Center', enabled: true, weight: 88, thresholdKm: 12, mode: 'centerAccess' },
   { id: 'crime', label: 'Crime', enabled: true, weight: 96, thresholdKm: 1, mode: 'belowAverageIsGood' },
   { id: 'registry', label: 'Registry', enabled: true, weight: 82, thresholdKm: 1, mode: 'belowAverageIsGood' },
 ]
@@ -309,27 +309,27 @@ export const EVALUATION_PROFILES: EvaluationProfile[] = [
   {
     id: 'balanced',
     label: 'Balanced',
-    weights: { parks: 58, groceries: 86, noise: 76, transit: 58, center: 42, crime: 96, registry: 82 },
+    weights: { parks: 58, groceries: 86, noise: 76, transit: 58, center: 88, crime: 96, registry: 82 },
   },
   {
     id: 'quiet',
     label: 'Quiet premium',
-    weights: { parks: 64, groceries: 64, noise: 100, transit: 38, center: 28, crime: 100, registry: 88 },
+    weights: { parks: 64, groceries: 64, noise: 100, transit: 38, center: 64, crime: 100, registry: 88 },
   },
   {
     id: 'carfree',
     label: 'Car-free',
-    weights: { parks: 50, groceries: 92, noise: 70, transit: 96, center: 68, crime: 88, registry: 74 },
+    weights: { parks: 50, groceries: 92, noise: 70, transit: 96, center: 98, crime: 88, registry: 74 },
   },
   {
     id: 'family',
     label: 'Family',
-    weights: { parks: 84, groceries: 86, noise: 90, transit: 48, center: 24, crime: 100, registry: 100 },
+    weights: { parks: 84, groceries: 86, noise: 90, transit: 48, center: 58, crime: 100, registry: 100 },
   },
   {
     id: 'investor',
     label: 'Investor',
-    weights: { parks: 46, groceries: 78, noise: 72, transit: 86, center: 74, crime: 92, registry: 80 },
+    weights: { parks: 46, groceries: 78, noise: 72, transit: 86, center: 106, crime: 92, registry: 80 },
   },
 ]
 
