@@ -1,21 +1,31 @@
 # Housing Suitability Map / Карта пригодности жилья
 
-Interactive map for comparing residential suitability across US cities, Russian cities, and selected regions. The app combines amenities, parks, transit, roads, traffic/noise proxies, building data, and hard land-use exclusions into a smooth suitability overlay. US-only safety sources remain limited to the jurisdictions where public datasets are available.
+Interactive map for comparing places to live with a suitability score instead of a flat list of addresses.
 
-Интерактивная карта для оценки пригодности жилья по городам США, городам РФ и выделенным регионам. Приложение учитывает удобства, парки, транспорт, дороги, прокси трафика/шума, этажность зданий и жесткие исключения по земле в едином плавном оверлее. US-only источники безопасности остаются ограничены юрисдикциями, где есть публичные наборы данных.
+The app blends OpenStreetMap amenities, transit, roads, water/park masks, building footprints, traffic and noise proxies, local fallback datasets, and hard land-use exclusions into a Leaflet overlay. It supports US cities, Russian cities, ZIP search where available, and custom selected regions.
 
 Live demo: https://iddictive.github.io/housing-suitability-map/
 
-## Features / Возможности
+## What it shows
 
-- Smooth suitability overlay with shared score palette and inspector context.
-- Hard exclusions for water, parks, roads, bridges, airports, and clearly non-residential land.
-- Search by US state, Russia, city, ZIP code where supported, and custom selected region.
-- Progressive loading states with local caching and fallback data.
+- Suitability, risk, and opportunity layers on the same map.
+- Hard exclusions for water, parks, bridges, airports, major roads, and clearly non-residential land.
+- Search by US state, country/region, city, ZIP code where supported, or a custom selected area.
 - Adjustable grid resolution and scoring profiles.
-- Point inspector with score, risk, confidence, sources, and pinned locations.
+- Point inspector with score, risk, confidence, source context, and pinned locations.
+- Progressive loading with local cache and sanitized fallback data.
 
-## Development / Разработка
+## Data model
+
+Most regions use OpenStreetMap-derived data:
+
+- Nominatim for city/ZIP geocoding and boundaries.
+- Overpass API for amenities, transit, roads, land-use masks, water, parks, and buildings.
+- OSM road classes as traffic/noise proxies when official traffic data is not available.
+
+Some datasets are jurisdiction-specific. Boston crime and MassDOT AADT are US/Massachusetts-only; other regions fall back to the generic OSM-based scoring path. The repository does not store private personal records.
+
+## Development
 
 ```bash
 npm install
@@ -34,8 +44,66 @@ GitHub Pages build:
 GITHUB_PAGES=true npm run build
 ```
 
-## Data Notes / Данные
+## Stack
 
-The app uses public geospatial sources and local sanitized fallback datasets. Russia support uses OpenStreetMap-derived Nominatim geocoding plus Overpass API amenities, transit, roads, land-use masks, and building footprints. Boston crime and MassDOT AADT remain US/MA-only; other regions fall back to OSM road-class traffic proxies. Private personal records are not stored in the repository.
+- React 19
+- TypeScript
+- Vite
+- Leaflet and React Leaflet
+- Turf helpers for distance calculations
 
-Приложение использует публичные геоданные и локальные очищенные fallback-наборы. Поддержка РФ основана на геокодинге Nominatim по OpenStreetMap и Overpass API для удобств, транспорта, дорог, land-use масок и зданий. Boston crime и MassDOT AADT остаются только для США/MA; остальные регионы используют OSM-прокси трафика по классу дорог. Персональные записи не хранятся в репозитории.
+---
+
+## Русский
+
+Интерактивная карта для сравнения мест для жизни через suitability score, а не через плоский список адресов.
+
+Приложение смешивает OpenStreetMap-данные по инфраструктуре, транспорту, дорогам, воде/паркам, зданиям, прокси трафика и шума, локальные fallback-наборы и жесткие land-use исключения в Leaflet-оверлее. Поддерживаются города США, города РФ, ZIP search где он доступен, и свои выбранные регионы.
+
+Демо: https://iddictive.github.io/housing-suitability-map/
+
+## Что показывает карта
+
+- Слои suitability, risk и opportunity на одной карте.
+- Жесткие исключения для воды, парков, мостов, аэропортов, крупных дорог и явно нежилой земли.
+- Поиск по US state, стране/региону, городу, ZIP где поддерживается, или выбранной области.
+- Настраиваемое разрешение сетки и scoring profiles.
+- Инспектор точки со score, risk, confidence, источниками и pinned locations.
+- Постепенная загрузка с локальным cache и очищенными fallback-данными.
+
+## Данные
+
+Большинство регионов используют данные на базе OpenStreetMap:
+
+- Nominatim для геокодинга городов/ZIP и границ.
+- Overpass API для amenities, транспорта, дорог, land-use masks, воды, парков и зданий.
+- OSM-классы дорог как прокси трафика/шума, если официальных traffic datasets нет.
+
+Часть источников привязана к конкретным юрисдикциям. Boston crime и MassDOT AADT работают только для США/Массачусетса; остальные регионы используют общий OSM-based scoring path. Репозиторий не хранит приватные персональные записи.
+
+## Разработка
+
+```bash
+npm install
+npm run dev
+```
+
+Production build:
+
+```bash
+npm run build
+```
+
+GitHub Pages build:
+
+```bash
+GITHUB_PAGES=true npm run build
+```
+
+## Стек
+
+- React 19
+- TypeScript
+- Vite
+- Leaflet и React Leaflet
+- Turf helpers для расчетов расстояний
