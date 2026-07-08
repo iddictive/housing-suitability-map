@@ -74,18 +74,23 @@ import {
 import {
   approximatePolygonAreaSqm,
   boundsToBbox,
-  centerForBounds,
   clamp,
   fieldBounds,
-  genericCityCheckpoints,
   latLngToMeters,
-  limitBoundsAroundCenter,
   metersPerDegreeLngForBounds,
   nearestMeters,
   normalizeBounds,
   pointInPolygon,
   pointToSegmentDistanceMeters,
 } from './domain/geo'
+import {
+  buildRegionCityConfig,
+  fetchCityConfig,
+  fetchZipConfig,
+  isUsZipCode,
+  slugifyFilePart,
+  titleCasePlaceName,
+} from './domain/location'
 import { fetchRegistryRiskPoints, registryRiskScoreAtPoint } from './domain/registryRisk'
 import type {
   Bounds as LeafletBounds,
@@ -124,7 +129,6 @@ import type {
   PointAnalysis,
   PointDataItem,
   ProjectedPoi,
-  RegionOption,
   RegistryDataMode,
   RegistryRiskPoint,
   SavedSite,
@@ -161,24 +165,6 @@ const parkStrengthFromArea = (areaSqm = 0) => {
 
   return clamp((edgeEquivalent - 40) / 320, 0.05, 1)
 }
-
-const isUsZipCode = (value: string) => /^\d{5}(?:-\d{4})?$/.test(value.trim())
-
-const titleCasePlaceName = (value: string) =>
-  value
-    .trim()
-    .split(/\s+/)
-    .map((word) => {
-      if (/^[A-Z]{2,}$/.test(word) || /^\d/.test(word)) {
-        return word
-      }
-
-      return word
-        .split('-')
-        .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part))
-        .join('-')
-    })
-    .join(' ')
 
 const MAX_RENDERED_GRID_CELLS = 45_000
 const GRID_SIZE_STEP_METERS = 50
@@ -563,27 +549,6 @@ const renderedCellSizeForBounds = (bounds: MapBounds, requestedCellSizeMeters: n
   )
 }
 
-const slugifyFilePart = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '') || 'region'
-
-type NominatimPlace = {
-  lat: string
-  lon: string
-  display_name: string
-  addresstype?: string
-  type?: string
-  address?: Record<string, string | undefined>
-  boundingbox?: [string, string, string, string]
-  geojson?: {
-    type?: string
-    coordinates?: unknown
-  }
-}
-
 type ResidentialEvidenceField = {
   overlayInclusionMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
@@ -598,218 +563,6 @@ type StaticMainSeedPayload = {
 }
 
 const BOSTON_MAIN_SEED_URL = `${import.meta.env.BASE_URL}data/boston-main-seed-2026-07-08.json`
-
-const isCityLevelPlace = (place: NominatimPlace) => {
-  const address = place.address ?? {}
-  const hasLocality = Boolean(
-    address.city ||
-      address.town ||
-      address.village ||
-      address.municipality ||
-      address.borough ||
-      address.township ||
-      address.hamlet,
-  )
-
-  if (hasLocality) {
-    return true
-  }
-
-  return ['city', 'town', 'village', 'municipality', 'borough', 'township', 'hamlet'].includes(
-    place.addresstype ?? '',
-  )
-}
-
-const latLngFromGeoJsonPosition = (position: unknown): LatLng | null => {
-  if (!Array.isArray(position) || position.length < 2) {
-    return null
-  }
-
-  const lng = Number(position[0])
-  const lat = Number(position[1])
-
-  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
-}
-
-const latLngRingFromGeoJsonRing = (ring: unknown): LatLng[] => {
-  if (!Array.isArray(ring)) {
-    return []
-  }
-
-  const points = ring
-    .map(latLngFromGeoJsonPosition)
-    .filter((point): point is LatLng => Boolean(point))
-
-  return normalizeRing(points)
-}
-
-const cityBoundaryAreasFromGeoJson = (geojson: NominatimPlace['geojson']) => {
-  if (!geojson?.coordinates) {
-    return []
-  }
-
-  const polygons =
-    geojson.type === 'Polygon'
-      ? [geojson.coordinates]
-      : geojson.type === 'MultiPolygon' && Array.isArray(geojson.coordinates)
-        ? geojson.coordinates
-        : []
-
-  return polygons
-    .map((polygon) => {
-      if (!Array.isArray(polygon)) {
-        return null
-      }
-
-      const [outerRing, ...innerRings] = polygon
-      const points = latLngRingFromGeoJsonRing(outerRing)
-
-      if (points.length < 3) {
-        return null
-      }
-
-      const holes = innerRings
-        .map(latLngRingFromGeoJsonRing)
-        .filter((hole) => hole.length >= 3)
-
-      return { points, holes }
-    })
-    .filter((area): area is { points: LatLng[]; holes: LatLng[][] } => Boolean(area))
-}
-
-const cityConfigFromNominatimPlace = (
-  place: NominatimPlace,
-  region: RegionOption,
-  label: string,
-  idPrefix: string,
-): CityConfig => {
-  const lat = Number(place.lat)
-  const lng = Number(place.lon)
-  const [southRaw, northRaw, westRaw, eastRaw] = place.boundingbox ?? []
-  const bounds = {
-    south: Number(southRaw),
-    north: Number(northRaw),
-    west: Number(westRaw),
-    east: Number(eastRaw),
-  }
-  const fallbackBounds = {
-    south: lat - 0.025,
-    north: lat + 0.025,
-    west: lng - 0.035,
-    east: lng + 0.035,
-  }
-  const center = { lat, lng }
-  const boundaryAreas = cityBoundaryAreasFromGeoJson(place.geojson)
-  const hasFiniteBounds = Object.values(bounds).every(Number.isFinite)
-  const cityLatSpan = bounds.north - bounds.south
-  const cityLngSpan = bounds.east - bounds.west
-  const canUseBoundaryBounds =
-    boundaryAreas.length > 0 &&
-    hasFiniteBounds &&
-    cityLatSpan > 0 &&
-    cityLngSpan > 0 &&
-    cityLatSpan <= 0.9 &&
-    cityLngSpan <= 1.2
-  const limitedBounds = limitBoundsAroundCenter(hasFiniteBounds ? bounds : fallbackBounds, center)
-  const safeBounds = canUseBoundaryBounds
-    ? bounds
-    : limitedBounds
-
-  return {
-    id: `${idPrefix}-${region.code}-${slugifyFilePart(label)}`,
-    countryCode: region.countryCode,
-    state: region.code,
-    city: label,
-    bounds: safeBounds,
-    dataBounds: canUseBoundaryBounds ? limitedBounds : undefined,
-    boundaryAreas: boundaryAreas.length > 0 ? boundaryAreas : undefined,
-    center,
-    checkpoints: genericCityCheckpoints(label, safeBounds, center),
-  }
-}
-
-const citySearchQuery = (city: string, region: RegionOption) =>
-  region.countryCode === 'us'
-    ? `${city}, ${region.name}, ${region.countryName}`
-    : `${city}, ${region.countryName}`
-
-const fetchCityConfig = async (regionCode: string, cityName: string): Promise<CityConfig> => {
-  const region = REGION_OPTIONS.find((item) => item.code === regionCode)
-  const city = titleCasePlaceName(cityName)
-
-  if (!region || city.length === 0) {
-    throw new Error('city required')
-  }
-
-  if (
-    [region.name.toLowerCase(), region.code.toLowerCase(), region.countryName.toLowerCase()].includes(
-      city.toLowerCase(),
-    )
-  ) {
-    throw new Error('city required')
-  }
-
-  const searchParams = new URLSearchParams({
-    format: 'jsonv2',
-    limit: '5',
-    countrycodes: region.countryCode,
-    addressdetails: '1',
-    polygon_geojson: '1',
-    q: citySearchQuery(city, region),
-  })
-  const cacheKey = `geocode:${region.code}:${city.toLowerCase()}`
-  const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
-
-    if (!response.ok) {
-      throw new Error(`Nominatim ${response.status}`)
-    }
-
-    return (await response.json()) as NominatimPlace[]
-  })
-  const place = places.find(isCityLevelPlace)
-
-  if (!place) {
-    throw new Error('city not found')
-  }
-
-  return cityConfigFromNominatimPlace(place, region, city, 'custom')
-}
-
-const fetchZipConfig = async (regionCode: string, zipCode: string): Promise<CityConfig> => {
-  const region = REGION_OPTIONS.find((item) => item.code === regionCode)
-  const normalizedZip = zipCode.trim()
-
-  if (!region || !region.supportsPostalCode || !isUsZipCode(normalizedZip)) {
-    throw new Error('zip required')
-  }
-
-  const searchParams = new URLSearchParams({
-    format: 'jsonv2',
-    limit: '1',
-    countrycodes: region.countryCode,
-    addressdetails: '1',
-    postalcode: normalizedZip,
-    state: region.name,
-  })
-  const cacheKey = `zip:${region.code}:${normalizedZip.toLowerCase()}`
-  const places = await cachedRequest<NominatimPlace[]>(cacheKey, async () => {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?${searchParams}`)
-
-    if (!response.ok) {
-      throw new Error(`Nominatim ${response.status}`)
-    }
-
-    return (await response.json()) as NominatimPlace[]
-  })
-  const place = places[0]
-
-  if (!place) {
-    throw new Error('zip not found')
-  }
-
-  return cityConfigFromNominatimPlace(place, region, `ZIP ${normalizedZip}`, 'zip')
-}
 
 const supportsBostonCrimeData = (city: CityConfig) => city.id === 'ma-boston'
 
@@ -3940,7 +3693,7 @@ const PointCompletenessPanel = ({
 
 const App = () => {
   const [selectedState, setSelectedState] = useState('MA')
-  const [selectedCityId, setSelectedCityId] = useState('ma-boston')
+  const [activeCity, setActiveCity] = useState<CityConfig>(CITY_OPTIONS[0])
   const [customCity, setCustomCity] = useState<CityConfig | null>(null)
   const [citySearchText, setCitySearchText] = useState('Boston')
   const [zipSearchText, setZipSearchText] = useState('')
@@ -4002,14 +3755,6 @@ const App = () => {
     ],
     [customCity, selectedState],
   )
-  const activeCity = useMemo(
-    () =>
-      CITY_OPTIONS.find((option) => option.id === selectedCityId && option.state === selectedState) ??
-      (customCity?.id === selectedCityId && customCity.state === selectedState ? customCity : null) ??
-      availableCities[0] ??
-      CITY_OPTIONS[0],
-    [availableCities, customCity, selectedCityId, selectedState],
-  )
   const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
   const activeDataBounds = useMemo(() => activeCity.dataBounds ?? activeCity.bounds, [activeCity])
   const renderedCellSizeMeters = useMemo(
@@ -4040,11 +3785,11 @@ const App = () => {
     }))
   }, [])
 
-  const activateCustomCity = useCallback((city: CityConfig) => {
+  const activateLocation = useCallback((city: CityConfig, syncSearchText = true) => {
     setCustomCity(city)
-    setSelectedCityId(city.id)
+    setActiveCity(city)
     setSelectedPoint(city.center)
-    if (!city.id.startsWith('region-')) {
+    if (syncSearchText) {
       setCitySearchText(city.city)
     }
     setSavedSites([])
@@ -4054,27 +3799,13 @@ const App = () => {
 
   const applyRegionBounds = useCallback(
     (bounds: MapBounds) => {
-      const center = centerForBounds(bounds)
-      const baseLabel = activeCity.city.startsWith('Region ')
-        ? activeCity.city.replace(/^Region\s+/, '')
-        : activeCity.city
-      const label = `Region ${titleCasePlaceName(baseLabel)}`
-      const regionCity: CityConfig = {
-        id: `region-${activeCity.state}-${boundsCachePart(bounds)}`,
-        countryCode: activeCity.countryCode,
-        state: activeCity.state,
-        city: label,
-        bounds,
-        center,
-        scoreCenter: scoreCenterForCity(activeCity),
-        checkpoints: genericCityCheckpoints(label, bounds, center),
-      }
+      const regionCity = buildRegionCityConfig(activeCity, bounds)
 
       setSelectedRegionBounds(bounds)
       setIsRegionSelectMode(false)
-      activateCustomCity(regionCity)
+      activateLocation(regionCity, false)
     },
-    [activeCity, activateCustomCity],
+    [activeCity, activateLocation],
   )
 
   useEffect(() => {
@@ -4163,6 +3894,15 @@ const App = () => {
       setRegistryDataMode('empty')
       setError(null)
       setIsLoading(true)
+      setPois(activeCity.id === 'ma-boston' ? FALLBACK_POIS : [])
+      setCrimeIncidents([])
+      setRegistryRiskPoints([])
+      setNoiseSegments([])
+      setLandPenaltyAreas([])
+      setTrafficSegments([])
+      setDataMode('sample')
+      setCrimeDataMode('empty')
+      setRegistryDataMode('empty')
       setLoadStage('osm', { status: 'loading', count: undefined, detail: 'amenities + parks' })
       setLoadStage('crime', {
         status: hasBostonCrime ? 'loading' : 'empty',
@@ -4717,7 +4457,9 @@ const App = () => {
     fetchCityConfig(selectedState, citySearchText)
       .then((city) => {
         setSelectedRegionBounds(null)
-        activateCustomCity(city)
+        setDraftRegionBounds(null)
+        setIsRegionSelectMode(false)
+        activateLocation(city)
       })
       .catch(() => {
         setError('City not found')
@@ -4725,7 +4467,7 @@ const App = () => {
       .finally(() => {
         setIsSearchingCity(false)
       })
-  }, [activateCustomCity, citySearchText, selectedState])
+  }, [activateLocation, citySearchText, selectedState])
 
   const searchZip = useCallback(() => {
     if (!supportsPostalSearch) {
@@ -4738,7 +4480,9 @@ const App = () => {
     fetchZipConfig(selectedState, zipSearchText)
       .then((city) => {
         setSelectedRegionBounds(null)
-        activateCustomCity(city)
+        setDraftRegionBounds(null)
+        setIsRegionSelectMode(false)
+        activateLocation(city)
       })
       .catch(() => {
         setError('ZIP not found')
@@ -4746,7 +4490,7 @@ const App = () => {
       .finally(() => {
         setIsSearchingZip(false)
       })
-  }, [activateCustomCity, selectedState, supportsPostalSearch, zipSearchText])
+  }, [activateLocation, selectedState, supportsPostalSearch, zipSearchText])
 
   const poisByCategory = useMemo(
     () =>
@@ -5104,11 +4848,12 @@ const App = () => {
             setSelectedState(nextState)
             setCustomCity(null)
             setSelectedRegionBounds(null)
-            setSelectedCityId(nextCity?.id ?? '')
+            setDraftRegionBounds(null)
             if (nextCity) {
-              setSelectedPoint(nextCity.center)
+              activateLocation(nextCity)
+            } else {
+              setCitySearchText(MAJOR_CITIES_BY_REGION[nextState]?.[0] ?? '')
             }
-            setCitySearchText(MAJOR_CITIES_BY_REGION[nextState]?.[0] ?? '')
             setZipSearchText('')
           }}
         >
