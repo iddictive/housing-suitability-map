@@ -168,6 +168,9 @@ const parkStrengthFromArea = (areaSqm = 0) => {
 
 const MAX_RENDERED_GRID_CELLS = 45_000
 const GRID_SIZE_STEP_METERS = 50
+const VIEWPORT_DETAIL_MIN_ZOOM = 13
+const HIGH_DETAIL_MIN_ZOOM = 15
+const VIEWPORT_DETAIL_PADDING_RATIO = 0.16
 const DEFAULT_APP_LANGUAGE = 'en' as const
 
 type AppLanguage = 'en' | 'ru'
@@ -319,10 +322,12 @@ const APP_COPY = {
       'residential signal': 'residential signal',
       'land without residential signal': 'land without residential signal',
       'no land mask': 'no land mask',
+      'land data unavailable': 'land data unavailable',
       'road / non-residential': 'road / non-residential',
       'water / non-residential': 'water / non-residential',
       'OSM cap: non-residential zone': 'OSM cap: non-residential zone',
       'OSM cap not found': 'OSM cap not found',
+      'no land source': 'no land source',
       present: 'present',
       'not found': 'not found',
       'no sources': 'no sources',
@@ -496,10 +501,12 @@ const APP_COPY = {
       'residential signal': 'жилой сигнал',
       'land without residential signal': 'земля без жилого сигнала',
       'no land mask': 'нет маски земли',
+      'land data unavailable': 'земельные данные недоступны',
       'road / non-residential': 'дорога / нежилое',
       'water / non-residential': 'вода / нежилое',
       'OSM cap: non-residential zone': 'OSM-лимит: нежилая зона',
       'OSM cap not found': 'OSM-лимит не найден',
+      'no land source': 'нет источника земли',
       present: 'есть',
       'not found': 'не найдено',
       'no sources': 'нет источников',
@@ -549,6 +556,88 @@ const renderedCellSizeForBounds = (bounds: MapBounds, requestedCellSizeMeters: n
   )
 }
 
+const boundsContainPoint = (bounds: MapBounds, point: LatLng) =>
+  point.lat >= bounds.south &&
+  point.lat <= bounds.north &&
+  point.lng >= bounds.west &&
+  point.lng <= bounds.east
+
+const boundsContainBounds = (outer: MapBounds, inner: MapBounds) =>
+  inner.south >= outer.south &&
+  inner.west >= outer.west &&
+  inner.north <= outer.north &&
+  inner.east <= outer.east
+
+const intersectBounds = (a: MapBounds, b: MapBounds): MapBounds | null => {
+  const bounds = {
+    south: Math.max(a.south, b.south),
+    west: Math.max(a.west, b.west),
+    north: Math.min(a.north, b.north),
+    east: Math.min(a.east, b.east),
+  }
+
+  return bounds.south < bounds.north && bounds.west < bounds.east ? bounds : null
+}
+
+const paddedBoundsWithin = (bounds: MapBounds, limit: MapBounds, paddingRatio: number): MapBounds => {
+  const latPadding = (bounds.north - bounds.south) * paddingRatio
+  const lngPadding = (bounds.east - bounds.west) * paddingRatio
+
+  return {
+    south: Math.max(limit.south, bounds.south - latPadding),
+    west: Math.max(limit.west, bounds.west - lngPadding),
+    north: Math.min(limit.north, bounds.north + latPadding),
+    east: Math.min(limit.east, bounds.east + lngPadding),
+  }
+}
+
+const plainBoundsFromLeaflet = (bounds: LeafletLatLngBounds): MapBounds => ({
+  south: bounds.getSouth(),
+  west: bounds.getWest(),
+  north: bounds.getNorth(),
+  east: bounds.getEast(),
+})
+
+const boundsAreClose = (a: MapBounds, b: MapBounds) =>
+  Math.abs(a.south - b.south) < 0.00005 &&
+  Math.abs(a.west - b.west) < 0.00005 &&
+  Math.abs(a.north - b.north) < 0.00005 &&
+  Math.abs(a.east - b.east) < 0.00005
+
+const zoomRequestedCellSize = (requestedCellSizeMeters: number, zoom: number | null) => {
+  if (zoom === null) {
+    return requestedCellSizeMeters
+  }
+
+  if (zoom >= HIGH_DETAIL_MIN_ZOOM) {
+    return Math.min(requestedCellSizeMeters, 50)
+  }
+
+  if (zoom >= VIEWPORT_DETAIL_MIN_ZOOM) {
+    return Math.min(requestedCellSizeMeters, 100)
+  }
+
+  return requestedCellSizeMeters
+}
+
+const detailBoundsForViewport = (
+  cityBounds: MapBounds,
+  viewportBounds: MapBounds | null,
+  zoom: number | null,
+) => {
+  if (!viewportBounds || zoom === null || zoom < VIEWPORT_DETAIL_MIN_ZOOM) {
+    return cityBounds
+  }
+
+  const visibleCityBounds = intersectBounds(cityBounds, viewportBounds)
+
+  if (!visibleCityBounds) {
+    return cityBounds
+  }
+
+  return paddedBoundsWithin(visibleCityBounds, cityBounds, VIEWPORT_DETAIL_PADDING_RATIO)
+}
+
 type ResidentialEvidenceField = {
   overlayInclusionMaskByCell: Uint8Array
   residentialCandidateMaskByCell: Uint8Array
@@ -566,6 +655,9 @@ const BOSTON_MAIN_SEED_URL = `${import.meta.env.BASE_URL}data/boston-main-seed-2
 
 const supportsBostonCrimeData = (city: CityConfig) => city.id === 'ma-boston'
 
+const supportsBostonMainSeed = (city: CityConfig, bounds: MapBounds) =>
+  city.id === 'ma-boston' || (city.state === 'MA' && boundsContainBounds(BOSTON_BOUNDS, bounds))
+
 const supportsMassDotTrafficData = (city: CityConfig) =>
   city.countryCode === 'us' && city.state === 'MA'
 
@@ -578,7 +670,7 @@ const fetchStaticBostonMainSeed = async (
   city: CityConfig,
   bounds: MapBounds,
 ): Promise<MainDataSnapshot | null> => {
-  if (city.id !== 'ma-boston') {
+  if (!supportsBostonMainSeed(city, bounds)) {
     return null
   }
 
@@ -591,7 +683,7 @@ const fetchStaticBostonMainSeed = async (
 
     const payload = (await response.json()) as StaticMainSeedPayload
 
-    if (payload.cityId !== city.id || payload.boundsKey !== boundsCachePart(bounds) || !payload.main) {
+    if (payload.cityId !== 'ma-boston' || payload.boundsKey !== boundsCachePart(BOSTON_BOUNDS) || !payload.main) {
       return null
     }
 
@@ -2196,6 +2288,7 @@ const buildSpatialFactorField = (
     noGoOverlayAreas,
     averageCrimeDensity,
     averageRegistryDensity,
+    poiSignalCount: Object.values(poisByCategory).reduce((total, categoryPois) => total + categoryPois.length, 0),
     noiseSegmentCount: noiseSegments.length,
     trafficSegmentCount: trafficSegments.length,
     landPenaltyAreaCount: landPenaltyAreas.length,
@@ -2214,14 +2307,25 @@ const mixSuitabilityField = (
   const residentialCandidateMaskByCell = residentialEvidence.residentialCandidateMaskByCell
   const enabledCriteria = criteria.filter((criterion) => criterion.enabled && criterion.weight > 0)
   const totalWeight = enabledCriteria.reduce((total, criterion) => total + criterion.weight, 0)
+  const hasLandEvidence = spatialField.landPenaltyAreaCount > 0
+  const hasMeaningfulSourceEvidence =
+    hasLandEvidence ||
+    spatialField.poiSignalCount > 0 ||
+    spatialField.noiseSegmentCount > 0 ||
+    spatialField.trafficSegmentCount > 0 ||
+    spatialField.averageCrimeDensity > 0 ||
+    spatialField.averageRegistryDensity > 0
+  const shouldRequireLandInclusion = hasLandEvidence || residentialEvidence.hasResidentialEvidence
   let minHabitableScore = Number.POSITIVE_INFINITY
   let maxHabitableScore = Number.NEGATIVE_INFINITY
   let scoreTotal = 0
   let habitableCellCount = 0
+  const hasLandInclusion = (index: number) =>
+    Boolean(overlayInclusionMaskByCell[index]) ||
+    (residentialEvidence.hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))
   const isEligibleCell = (index: number) =>
     spatialField.landScoreCapByCell[index] > 0 &&
-    (Boolean(overlayInclusionMaskByCell[index]) ||
-      (residentialEvidence.hasResidentialEvidence && Boolean(residentialCandidateMaskByCell[index]))) &&
+    (!shouldRequireLandInclusion || hasLandInclusion(index)) &&
     !spatialField.overlayExclusionMaskByCell[index] &&
     !spatialField.noGoMaskByCell[index]
 
@@ -2260,7 +2364,7 @@ const mixSuitabilityField = (
   for (let index = 0; index < cellCount; index += 1) {
     const isHabitable = isEligibleCell(index)
     const normalizedScore =
-      isHabitable && Number.isFinite(scoreRange) && scoreRange > 0.001
+      isHabitable && hasMeaningfulSourceEvidence && Number.isFinite(scoreRange) && scoreRange > 0.001
         ? clamp((rawScores[index] - minHabitableScore) / scoreRange)
         : rawScores[index]
 
@@ -2300,6 +2404,7 @@ const mixSuitabilityField = (
     evaluatedCellCount: habitableCellCount,
     averageCrimeDensity: spatialField.averageCrimeDensity,
     averageRegistryDensity: spatialField.averageRegistryDensity,
+    poiSignalCount: spatialField.poiSignalCount,
     noiseSegmentCount: spatialField.noiseSegmentCount,
     trafficSegmentCount: spatialField.trafficSegmentCount,
     landPenaltyAreaCount: spatialField.landPenaltyAreaCount,
@@ -2521,7 +2626,7 @@ const colorForScore = (score: number) => {
 }
 
 const isDrawableOverlayCell = (field: SuitabilityField, index: number) =>
-  Boolean(field.overlayInclusionMaskByCell[index]) &&
+  (field.landPenaltyAreaCount === 0 || Boolean(field.overlayInclusionMaskByCell[index])) &&
   !field.overlayExclusionMaskByCell[index] &&
   !field.noGoMaskByCell[index]
 
@@ -2915,15 +3020,23 @@ const analyzePoint = (
   const isWater = Boolean(field.waterMaskByCell[cellIndex]) || vectorExclusion === 'water'
   const isRoad = vectorExclusion === 'road'
   const isAreaExcluded = vectorExclusion === 'area'
+  const hasLandEvidence = field.landPenaltyAreaCount > 0
   const isUnscorableLand =
-    !hasOverlayInclusion || isWater || isRoad || isNoGo || hasOverlayExclusion || isAreaExcluded
+    (hasLandEvidence && !hasOverlayInclusion) ||
+    isWater ||
+    isRoad ||
+    isNoGo ||
+    hasOverlayExclusion ||
+    isAreaExcluded
   const landFactorScore = isUnscorableLand
     ? 0
     : hasResidentialEvidence
       ? landCap < 1
         ? landCap
         : 0.86
-      : Math.min(landCap, 0.42)
+      : hasLandEvidence
+        ? Math.min(landCap, 0.42)
+        : 0.62
   const pointLandStatus = isWater
     ? 'water'
     : isRoad
@@ -2936,14 +3049,18 @@ const analyzePoint = (
             ? 'residential signal'
             : hasOverlayInclusion
               ? 'land without residential signal'
-              : 'no land mask'
+              : hasLandEvidence
+                ? 'no land mask'
+                : 'land data unavailable'
   const landDetail = isRoad
     ? 'road / non-residential'
     : landCap === 0
       ? 'water / non-residential'
       : landCap < 1
         ? 'OSM cap: non-residential zone'
-        : 'OSM cap not found'
+        : hasLandEvidence
+          ? 'OSM cap not found'
+          : 'no land source'
   const factors: FactorBreakdown[] = [
     {
       id: 'parks',
@@ -3026,7 +3143,7 @@ const analyzePoint = (
       (crimeIncidents.length > 0 ? 0.08 : 0) +
       (registryRiskPoints.length > 0 ? 0.04 : 0),
   )
-  const landConfidence = isUnscorableLand ? 0 : hasResidentialEvidence ? 1 : 0.55
+  const landConfidence = isUnscorableLand ? 0 : hasResidentialEvidence ? 1 : hasLandEvidence ? 0.55 : 0.35
   const adjustedConfidence = Math.min(confidence, clamp(0.42 + landConfidence * 0.58))
   const dataCompleteness: PointDataItem[] = [
     {
@@ -3591,6 +3708,32 @@ const MapViewportSync = ({ bounds }: { bounds: MapBounds }) => {
   return null
 }
 
+type MapViewSnapshot = {
+  bounds: MapBounds
+  zoom: number
+}
+
+const MapViewStateSync = ({ onChange }: { onChange: (snapshot: MapViewSnapshot) => void }) => {
+  const map = useMap()
+  const emitSnapshot = useCallback(() => {
+    onChange({
+      bounds: plainBoundsFromLeaflet(map.getBounds()),
+      zoom: map.getZoom(),
+    })
+  }, [map, onChange])
+
+  useEffect(() => {
+    emitSnapshot()
+  }, [emitSnapshot])
+
+  useMapEvents({
+    moveend: emitSnapshot,
+    zoomend: emitSnapshot,
+  })
+
+  return null
+}
+
 const MapLayoutResizeSync = ({ layoutKey }: { layoutKey: string }) => {
   const map = useMap()
 
@@ -3736,6 +3879,7 @@ const App = () => {
   const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
+  const [mapViewSnapshot, setMapViewSnapshot] = useState<MapViewSnapshot | null>(null)
   const [appLanguage, setAppLanguage] = useState<AppLanguage>(DEFAULT_APP_LANGUAGE)
   const deferredCriteria = useDeferredValue(criteria)
   const isEnglish = appLanguage === 'en'
@@ -3757,11 +3901,25 @@ const App = () => {
   )
   const activeCityLabel = useMemo(() => titleCasePlaceName(activeCity.city), [activeCity.city])
   const activeDataBounds = useMemo(() => activeCity.dataBounds ?? activeCity.bounds, [activeCity])
-  const renderedCellSizeMeters = useMemo(
+  const cityCellSizeMeters = useMemo(
     () => renderedCellSizeForBounds(activeCity.bounds, appliedCellSizeMeters),
     [activeCity.bounds, appliedCellSizeMeters],
   )
-  const deferredCellSizeMeters = useDeferredValue(renderedCellSizeMeters)
+  const overlayFieldBounds = useMemo(
+    () => detailBoundsForViewport(activeCity.bounds, mapViewSnapshot?.bounds ?? null, mapViewSnapshot?.zoom ?? null),
+    [activeCity.bounds, mapViewSnapshot],
+  )
+  const overlayRequestedCellSizeMeters = useMemo(
+    () => zoomRequestedCellSize(appliedCellSizeMeters, mapViewSnapshot?.zoom ?? null),
+    [appliedCellSizeMeters, mapViewSnapshot],
+  )
+  const overlayCellSizeMeters = useMemo(
+    () => renderedCellSizeForBounds(overlayFieldBounds, overlayRequestedCellSizeMeters),
+    [overlayFieldBounds, overlayRequestedCellSizeMeters],
+  )
+  const deferredCityCellSizeMeters = useDeferredValue(cityCellSizeMeters)
+  const deferredOverlayCellSizeMeters = useDeferredValue(overlayCellSizeMeters)
+  const deferredOverlayFieldBounds = useDeferredValue(overlayFieldBounds)
   const activeZoneCacheKey = useMemo(
     () => `${activeCity.id}:${boundsCachePart(activeDataBounds)}`,
     [activeCity.id, activeDataBounds],
@@ -3783,6 +3941,20 @@ const App = () => {
         ...patch,
       },
     }))
+  }, [])
+
+  const handleMapViewChange = useCallback((snapshot: MapViewSnapshot) => {
+    setMapViewSnapshot((currentSnapshot) => {
+      if (
+        currentSnapshot &&
+        currentSnapshot.zoom === snapshot.zoom &&
+        boundsAreClose(currentSnapshot.bounds, snapshot.bounds)
+      ) {
+        return currentSnapshot
+      }
+
+      return snapshot
+    })
   }, [])
 
   const activateLocation = useCallback((city: CityConfig, syncSearchText = true) => {
@@ -4503,7 +4675,7 @@ const App = () => {
     [dataMode, pois],
   )
 
-  const spatialFactorField = useMemo(
+  const citySpatialFactorField = useMemo(
     () =>
       buildSpatialFactorField(
         poisByCategory,
@@ -4515,11 +4687,38 @@ const App = () => {
         activeCity.bounds,
         activeCity.boundaryAreas,
         scoreCenterForCity(activeCity),
-        deferredCellSizeMeters,
+        deferredCityCellSizeMeters,
       ),
     [
       activeCity,
-      deferredCellSizeMeters,
+      deferredCityCellSizeMeters,
+      crimeIncidents,
+      registryRiskPoints,
+      landPenaltyAreas,
+      noiseSegments,
+      poisByCategory,
+      trafficSegments,
+    ],
+  )
+
+  const overlaySpatialFactorField = useMemo(
+    () =>
+      buildSpatialFactorField(
+        poisByCategory,
+        crimeIncidents,
+        registryRiskPoints,
+        noiseSegments,
+        landPenaltyAreas,
+        trafficSegments,
+        deferredOverlayFieldBounds,
+        activeCity.boundaryAreas,
+        scoreCenterForCity(activeCity),
+        deferredOverlayCellSizeMeters,
+      ),
+    [
+      activeCity,
+      deferredOverlayCellSizeMeters,
+      deferredOverlayFieldBounds,
       crimeIncidents,
       registryRiskPoints,
       landPenaltyAreas,
@@ -4536,24 +4735,44 @@ const App = () => {
     [buildingDataMode, buildingFootprints],
   )
 
-  const residentialEvidence = useMemo(
+  const cityResidentialEvidence = useMemo(
     () =>
       buildResidentialEvidenceField(
-        spatialFactorField,
+        citySpatialFactorField,
         buildingFootprints,
         buildingEligibilityActive,
       ),
-    [buildingEligibilityActive, buildingFootprints, spatialFactorField],
+    [buildingEligibilityActive, buildingFootprints, citySpatialFactorField],
+  )
+
+  const overlayResidentialEvidence = useMemo(
+    () =>
+      buildResidentialEvidenceField(
+        overlaySpatialFactorField,
+        buildingFootprints,
+        buildingEligibilityActive,
+      ),
+    [buildingEligibilityActive, buildingFootprints, overlaySpatialFactorField],
   )
 
   const suitabilityField = useMemo(
     () =>
       mixSuitabilityField(
         deferredCriteria,
-        spatialFactorField,
-        residentialEvidence,
+        citySpatialFactorField,
+        cityResidentialEvidence,
       ),
-    [deferredCriteria, residentialEvidence, spatialFactorField],
+    [deferredCriteria, cityResidentialEvidence, citySpatialFactorField],
+  )
+
+  const overlaySuitabilityField = useMemo(
+    () =>
+      mixSuitabilityField(
+        deferredCriteria,
+        overlaySpatialFactorField,
+        overlayResidentialEvidence,
+      ),
+    [deferredCriteria, overlayResidentialEvidence, overlaySpatialFactorField],
   )
 
   const neighborhoodScores = useMemo(
@@ -4563,6 +4782,11 @@ const App = () => {
         score: scoreAt(suitabilityField, checkpoint),
       })).sort((a, b) => b.score - a.score),
     [activeCity.checkpoints, suitabilityField],
+  )
+
+  const selectedPointField = useMemo(
+    () => (boundsContainPoint(fieldBounds(overlaySuitabilityField), selectedPoint) ? overlaySuitabilityField : suitabilityField),
+    [overlaySuitabilityField, selectedPoint, suitabilityField],
   )
 
   const visiblePois = useMemo(
@@ -4595,7 +4819,9 @@ const App = () => {
   const applyGridResolution = useCallback(() => {
     setAppliedCellSizeMeters(cellSizeMeters)
   }, [cellSizeMeters])
-  const renderedGridIsThrottled = renderedCellSizeMeters > appliedCellSizeMeters
+  const renderedGridIsThrottled = cityCellSizeMeters > appliedCellSizeMeters
+  const overlayGridIsDetailed =
+    overlayCellSizeMeters < cityCellSizeMeters || !boundsAreClose(overlayFieldBounds, activeCity.bounds)
 
   const dataCoverage = useMemo(() => {
     const sourceScores = [
@@ -4673,7 +4899,8 @@ const App = () => {
   const overlayIsResolving =
     isLoading ||
     loadProgress < 100 ||
-    residentialEvidence.isProvisionalEligibility ||
+    cityResidentialEvidence.isProvisionalEligibility ||
+    overlayResidentialEvidence.isProvisionalEligibility ||
     Object.values(loadStages).some((stage) => stage.status === 'loading')
 
   const rawSelectedAnalysis = useMemo(
@@ -4682,7 +4909,7 @@ const App = () => {
         selectedPoint,
         activeCity,
         criteria,
-        suitabilityField,
+        selectedPointField,
         poisByCategory,
         crimeIncidents,
         registryRiskPoints,
@@ -4701,7 +4928,7 @@ const App = () => {
       noiseSegments,
       poisByCategory,
       selectedPoint,
-      suitabilityField,
+      selectedPointField,
       trafficSegments,
     ],
   )
@@ -4777,7 +5004,9 @@ const App = () => {
       profile: activeProfileId,
       location: { state: activeCity.state, city: activeCity.city, scoreCenter: scoreCenterForCity(activeCity) },
       gridMeters: appliedCellSizeMeters,
-      renderedGridMeters: renderedCellSizeMeters,
+      renderedGridMeters: cityCellSizeMeters,
+      overlayGridMeters: overlayCellSizeMeters,
+      overlayBounds: overlayFieldBounds,
       averageScore: hasEvaluatedCells ? averageScore : null,
       selected: selectedAnalysis,
       shortlist: savedSites,
@@ -4808,7 +5037,9 @@ const App = () => {
     activeCity,
     averageScore,
     appliedCellSizeMeters,
-    renderedCellSizeMeters,
+    cityCellSizeMeters,
+    overlayCellSizeMeters,
+    overlayFieldBounds,
     buildingFootprints.length,
     buildingIsCapped,
     buildingTotalCount,
@@ -5148,7 +5379,8 @@ const App = () => {
               {cellSizeMeters === appliedCellSizeMeters
                 ? `${appCopy.panels.activeGrid}: ${appliedCellSizeMeters} m`
                 : `${appCopy.panels.selectedGrid}: ${cellSizeMeters} m`}
-              {renderedGridIsThrottled ? ` · ${appCopy.panels.renderedGrid} ${renderedCellSizeMeters} m` : ''}
+              {renderedGridIsThrottled ? ` · ${appCopy.panels.renderedGrid} ${cityCellSizeMeters} m` : ''}
+              {overlayGridIsDetailed ? ` · ${appCopy.panels.renderedGrid} ${overlayCellSizeMeters} m` : ''}
             </span>
             <button
               className="text-button"
@@ -5253,8 +5485,8 @@ const App = () => {
                       ? registryRiskPoints.length
                     : criterion.id === 'noise'
                       ? poisByCategory.noise.length +
-                        suitabilityField.noiseSegmentCount +
-                        suitabilityField.trafficSegmentCount +
+                      suitabilityField.noiseSegmentCount +
+                      suitabilityField.trafficSegmentCount +
                         suitabilityField.landPenaltyAreaCount
                       : poisByCategory[criterion.id].length
 
@@ -5403,6 +5635,7 @@ const App = () => {
           <AttributionControl position="bottomright" prefix={false} />
           <ZoomControl position="bottomright" />
           <MapViewportSync bounds={activeCity.bounds} />
+          <MapViewStateSync onChange={handleMapViewChange} />
           <MapLayoutResizeSync layoutKey={`${isLeftPanelOpen}-${isInspectorOpen}`} />
           <MapClickSelector disabled={isRegionSelectMode} onSelect={setSelectedPoint} />
           <MapRegionSelector
@@ -5413,7 +5646,7 @@ const App = () => {
             onSelect={applyRegionBounds}
           />
           <SuitabilityCanvasOverlay
-            field={suitabilityField}
+            field={overlaySuitabilityField}
             mode={layerMode}
             opacity={overlayOpacity}
             resolving={overlayIsResolving}

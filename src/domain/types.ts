@@ -273,6 +273,7 @@ export type SuitabilityField = {
   evaluatedCellCount: number
   averageCrimeDensity: number
   averageRegistryDensity: number
+  poiSignalCount: number
   noiseSegmentCount: number
   trafficSegmentCount: number
   landPenaltyAreaCount: number
