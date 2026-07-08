@@ -182,6 +182,368 @@ const titleCasePlaceName = (value: string) =>
 
 const MAX_RENDERED_GRID_CELLS = 45_000
 const GRID_SIZE_STEP_METERS = 50
+const DEFAULT_APP_LANGUAGE = 'en' as const
+
+type AppLanguage = 'en' | 'ru'
+
+const APP_COPY = {
+  en: {
+    title: 'Housing suitability map',
+    topbar: {
+      searchAndPanels: 'Search and panels',
+      showPanel: 'Show settings panel',
+      hidePanel: 'Hide settings panel',
+      findCity: 'Find city',
+      findZip: 'Find ZIP code',
+      selectRegion: 'Select region',
+      refresh: 'Refresh data',
+      switchLanguage: 'Switch to Russian',
+      showInspector: 'Show inspector',
+      hideInspector: 'Hide inspector',
+      region: 'Region',
+      city: 'City or area',
+      zip: 'ZIP code',
+    },
+    panels: {
+      mapSettings: 'Map settings',
+      loadStatus: 'Load status',
+      pointInspector: 'Point inspector',
+      point: 'Point',
+      coordinates: 'Coordinates',
+      upside: 'Upside',
+      risk: 'Risk',
+      confidence: 'Confidence',
+      pinnedSites: 'Pinned sites',
+      noPinned: 'No pinned points.',
+      active: 'Active',
+      selection: 'Selection',
+      selecting: 'selecting',
+      none: 'none',
+      grid: 'Grid',
+      activeGrid: 'Active',
+      selectedGrid: 'Selected',
+      renderedGrid: 'rendered',
+      apply: 'Apply',
+      scoringProfile: 'Scoring profile',
+      overlay: 'Overlay',
+      score: 'Score',
+      potential: 'Potential',
+      showLayer: 'Show layer',
+      opacity: 'Opacity',
+      criteria: 'Criteria',
+      hidePoints: 'Hide points',
+      showPoints: 'Show points',
+      strongZones: 'Strong zones',
+      growthZones: 'Growth zones',
+      sources: 'Sources',
+      buildingsSample: 'Buildings sample',
+      of: 'of',
+      critical: 'Critical',
+      top: 'Top',
+      suitabilityScale: 'Suitability scale',
+      liveDataUnavailable: 'Some live data is unavailable.',
+      pin: 'Pin',
+      pinned: 'Pinned',
+      export: 'Export',
+    },
+    categories: {
+      parks: 'Parks',
+      groceries: 'Groceries',
+      noise: 'Noise',
+      transit: 'Transit',
+    },
+    criteria: {
+      parks: 'Parks',
+      groceries: 'Groceries',
+      noise: 'Noise',
+      transit: 'Transit',
+      center: 'Center',
+      crime: 'Crime',
+      registry: 'Registry',
+    },
+    profiles: {
+      balanced: 'Balanced',
+      quiet: 'Quiet premium',
+      carfree: 'Car-free',
+      family: 'Family',
+      investor: 'Investor',
+    },
+    stages: {
+      osm: 'OSM',
+      crime: 'Crime',
+      registry: 'Registry',
+      noise: 'Noise',
+      traffic: 'Traffic',
+      buildings: 'Buildings',
+    },
+    loading: {
+      loading: 'loading',
+      cached: 'cached',
+      ready: 'ready',
+      none: 'none',
+      pending: 'pending',
+      error: 'error',
+      notAvailable: 'n/a',
+      bostonOnly: 'Boston only',
+      dataReady: 'Data ready',
+      gaps: 'Loaded with gaps',
+      partial: 'Partially loaded',
+    },
+    scoreBands: {
+      'Non-residential': 'Non-residential',
+      Critical: 'Critical',
+      'Very poor': 'Very poor',
+      Poor: 'Poor',
+      'Below average': 'Below average',
+      Average: 'Average',
+      Good: 'Good',
+      'Very good': 'Very good',
+      Excellent: 'Excellent',
+      Top: 'Top',
+    },
+    phrases: {
+      fallback: 'fallback',
+      loaded: 'loaded',
+      snapshot: 'snapshot',
+      'repo seed': 'repo seed',
+      unavailable: 'unavailable',
+      'no amenities': 'no amenities',
+      'OSM proxy': 'OSM proxy',
+      'OSM road proxy': 'OSM road proxy',
+      'no roads': 'no roads',
+      'no local points': 'no local points',
+      'local dataset': 'local dataset',
+      'sanitized local': 'sanitized local',
+      'amenities + parks': 'amenities + parks',
+      'roads + masks': 'roads + masks',
+      'OSM buildings': 'OSM buildings',
+      caps: 'caps',
+      'no data': 'no data',
+      'no live data': 'no live data',
+      'below baseline': 'below baseline',
+      'near baseline': 'near baseline',
+      'above baseline': 'above baseline',
+      'low baseline': 'low baseline',
+      'moderate baseline': 'moderate baseline',
+      'elevated baseline': 'elevated baseline',
+      water: 'water',
+      road: 'road',
+      'non-residential/no-go': 'non-residential/no-go',
+      excluded: 'excluded',
+      'residential signal': 'residential signal',
+      'land without residential signal': 'land without residential signal',
+      'no land mask': 'no land mask',
+      'road / non-residential': 'road / non-residential',
+      'water / non-residential': 'water / non-residential',
+      'OSM cap: non-residential zone': 'OSM cap: non-residential zone',
+      'OSM cap not found': 'OSM cap not found',
+      present: 'present',
+      'not found': 'not found',
+      'no sources': 'no sources',
+      'Shortlist candidate: strong suitability without critical risk.':
+        'Shortlist candidate: strong suitability without critical risk.',
+      'Needs caution: risk or noise dominates amenities.':
+        'Needs caution: risk or noise dominates amenities.',
+      'Borderline area: check the exact property and street context.':
+        'Borderline area: check the exact property and street context.',
+      Park: 'Park',
+      Store: 'Store',
+      Station: 'Station',
+      Building: 'Building',
+      Land: 'Land',
+      'Residential signal': 'Residential signal',
+      Amenities: 'Amenities',
+    },
+    detailWords: {
+      nearby: 'nearby',
+      storesNearby: 'stores nearby',
+      traffic: 'traffic',
+      nightlife: 'nightlife',
+      radius: 'radius',
+      potential: 'potential',
+      risk: 'risk',
+    },
+  },
+  ru: {
+    title: 'Карта пригодности жилья',
+    topbar: {
+      searchAndPanels: 'Поиск и панели',
+      showPanel: 'Показать панель настроек',
+      hidePanel: 'Скрыть панель настроек',
+      findCity: 'Найти город',
+      findZip: 'Найти ZIP-код',
+      selectRegion: 'Выбрать область',
+      refresh: 'Обновить данные',
+      switchLanguage: 'Переключить на английский',
+      showInspector: 'Показать инспектор',
+      hideInspector: 'Скрыть инспектор',
+      region: 'Регион',
+      city: 'Город или область',
+      zip: 'ZIP-код',
+    },
+    panels: {
+      mapSettings: 'Настройки карты',
+      loadStatus: 'Статус загрузки',
+      pointInspector: 'Инспектор точки',
+      point: 'Точка',
+      coordinates: 'Координаты',
+      upside: 'Плюсы',
+      risk: 'Риск',
+      confidence: 'Уверенность',
+      pinnedSites: 'Закрепленные места',
+      noPinned: 'Закрепленных точек нет.',
+      active: 'Активно',
+      selection: 'Выбор',
+      selecting: 'выбор',
+      none: 'нет',
+      grid: 'Сетка',
+      activeGrid: 'Активно',
+      selectedGrid: 'Выбрано',
+      renderedGrid: 'отрисовано',
+      apply: 'Применить',
+      scoringProfile: 'Профиль оценки',
+      overlay: 'Слой',
+      score: 'Оценка',
+      potential: 'Потенциал',
+      showLayer: 'Показать слой',
+      opacity: 'Прозрачность',
+      criteria: 'Критерии',
+      hidePoints: 'Скрыть точки',
+      showPoints: 'Показать точки',
+      strongZones: 'Сильные зоны',
+      growthZones: 'Зоны роста',
+      sources: 'Источники',
+      buildingsSample: 'Выборка зданий',
+      of: 'из',
+      critical: 'Критично',
+      top: 'Топ',
+      suitabilityScale: 'Шкала пригодности',
+      liveDataUnavailable: 'Часть live-данных недоступна.',
+      pin: 'Закрепить',
+      pinned: 'Закреплено',
+      export: 'Экспорт',
+    },
+    categories: {
+      parks: 'Парки',
+      groceries: 'Продукты',
+      noise: 'Шум',
+      transit: 'Транспорт',
+    },
+    criteria: {
+      parks: 'Парки',
+      groceries: 'Продукты',
+      noise: 'Шум',
+      transit: 'Транспорт',
+      center: 'Центр',
+      crime: 'Криминальность',
+      registry: 'Реестр',
+    },
+    profiles: {
+      balanced: 'Баланс',
+      quiet: 'Тихий премиум',
+      carfree: 'Без машины',
+      family: 'Семья',
+      investor: 'Инвестор',
+    },
+    stages: {
+      osm: 'OSM',
+      crime: 'Криминальность',
+      registry: 'Реестр',
+      noise: 'Шум',
+      traffic: 'Трафик',
+      buildings: 'Здания',
+    },
+    loading: {
+      loading: 'загрузка',
+      cached: 'кэш',
+      ready: 'готово',
+      none: 'нет',
+      pending: 'ожидание',
+      error: 'ошибка',
+      notAvailable: 'н/д',
+      bostonOnly: 'только Boston',
+      dataReady: 'Данные готовы',
+      gaps: 'Загружено с пробелами',
+      partial: 'Загружено частично',
+    },
+    scoreBands: {
+      'Non-residential': 'Нежилое',
+      Critical: 'Критично',
+      'Very poor': 'Очень плохо',
+      Poor: 'Плохо',
+      'Below average': 'Ниже среднего',
+      Average: 'Средне',
+      Good: 'Хорошо',
+      'Very good': 'Очень хорошо',
+      Excellent: 'Отлично',
+      Top: 'Топ',
+    },
+    phrases: {
+      fallback: 'резерв',
+      loaded: 'загружено',
+      snapshot: 'снимок',
+      'repo seed': 'база repo',
+      unavailable: 'недоступно',
+      'no amenities': 'нет инфраструктуры',
+      'OSM proxy': 'OSM-прокси',
+      'OSM road proxy': 'OSM-прокси дорог',
+      'no roads': 'нет дорог',
+      'no local points': 'нет локальных точек',
+      'local dataset': 'локальный набор',
+      'sanitized local': 'очищенный локальный',
+      'amenities + parks': 'инфраструктура + парки',
+      'roads + masks': 'дороги + маски',
+      'OSM buildings': 'OSM-здания',
+      caps: 'ограничений',
+      'no data': 'нет данных',
+      'no live data': 'нет live-данных',
+      'below baseline': 'ниже базы',
+      'near baseline': 'около базы',
+      'above baseline': 'выше базы',
+      'low baseline': 'низкая база',
+      'moderate baseline': 'средняя база',
+      'elevated baseline': 'повышенная база',
+      water: 'вода',
+      road: 'дорога',
+      'non-residential/no-go': 'нежилое/no-go',
+      excluded: 'исключено',
+      'residential signal': 'жилой сигнал',
+      'land without residential signal': 'земля без жилого сигнала',
+      'no land mask': 'нет маски земли',
+      'road / non-residential': 'дорога / нежилое',
+      'water / non-residential': 'вода / нежилое',
+      'OSM cap: non-residential zone': 'OSM-лимит: нежилая зона',
+      'OSM cap not found': 'OSM-лимит не найден',
+      present: 'есть',
+      'not found': 'не найдено',
+      'no sources': 'нет источников',
+      'Shortlist candidate: strong suitability without critical risk.':
+        'Кандидат в шортлист: сильная пригодность без критичного риска.',
+      'Needs caution: risk or noise dominates amenities.':
+        'Нужна осторожность: риск или шум сильнее инфраструктуры.',
+      'Borderline area: check the exact property and street context.':
+        'Пограничная зона: проверьте конкретный дом и улицу.',
+      Park: 'Парк',
+      Store: 'Магазин',
+      Station: 'Станция',
+      Building: 'Здание',
+      Land: 'Земля',
+      'Residential signal': 'Жилой сигнал',
+      Amenities: 'Инфраструктура',
+    },
+    detailWords: {
+      nearby: 'рядом',
+      storesNearby: 'магазинов рядом',
+      traffic: 'трафик',
+      nightlife: 'ночная активность',
+      radius: 'радиус',
+      potential: 'потенциал',
+      risk: 'риск',
+    },
+  },
+} as const
+
+type AppCopy = (typeof APP_COPY)[AppLanguage]
 
 const formatBoundsSummary = (bounds: MapBounds) => {
   const latSpanKm = (bounds.north - bounds.south) * METERS_PER_DEGREE_LAT / 1000
@@ -228,6 +590,14 @@ type ResidentialEvidenceField = {
   hasResidentialEvidence: boolean
   isProvisionalEligibility: boolean
 }
+
+type StaticMainSeedPayload = {
+  cityId?: string
+  boundsKey?: string
+  main?: MainDataSnapshot
+}
+
+const BOSTON_MAIN_SEED_URL = `${import.meta.env.BASE_URL}data/boston-main-seed-2026-07-08.json`
 
 const isCityLevelPlace = (place: NominatimPlace) => {
   const address = place.address ?? {}
@@ -449,6 +819,38 @@ const supportsMassDotTrafficData = (city: CityConfig) =>
 const supportsLocalRegistryRiskData = (city: CityConfig) => city.countryCode === 'us'
 
 const scoreCenterForCity = (city: CityConfig) => city.scoreCenter ?? city.center
+
+const fetchStaticBostonMainSeed = async (
+  signal: AbortSignal,
+  city: CityConfig,
+  bounds: MapBounds,
+): Promise<MainDataSnapshot | null> => {
+  if (city.id !== 'ma-boston') {
+    return null
+  }
+
+  try {
+    const response = await fetch(BOSTON_MAIN_SEED_URL, { signal })
+
+    if (!response.ok) {
+      return null
+    }
+
+    const payload = (await response.json()) as StaticMainSeedPayload
+
+    if (payload.cityId !== city.id || payload.boundsKey !== boundsCachePart(bounds) || !payload.main) {
+      return null
+    }
+
+    return payload.main
+  } catch {
+    if (signal.aborted) {
+      return null
+    }
+
+    return null
+  }
+}
 
 const buildOverpassQuery = (bounds: MapBounds) => {
   const bbox = boundsToBbox(bounds)
@@ -2425,6 +2827,107 @@ const labelForScore = (score: number) => {
   return band?.label ?? SCORE_BANDS[SCORE_BANDS.length - 1].label
 }
 
+const translateScoreBand = (label: string, copy: AppCopy) =>
+  copy.scoreBands[label as keyof typeof copy.scoreBands] ?? label
+
+const translatePhrase = (value: string, copy: AppCopy) => {
+  const exact = copy.phrases[value as keyof typeof copy.phrases]
+
+  if (exact) {
+    return exact
+  }
+
+  const storesNearby = value.match(/^(\d+) stores nearby$/)
+
+  if (storesNearby) {
+    return `${storesNearby[1]} ${copy.detailWords.storesNearby}`
+  }
+
+  const nearbyDistance = value.match(/^(\d+) nearby · (.+)$/)
+
+  if (nearbyDistance) {
+    return `${nearbyDistance[1]} ${copy.detailWords.nearby} · ${nearbyDistance[2]}`
+  }
+
+  const trafficAndNightlife = value.match(/^traffic (.+), nightlife (.+)$/)
+
+  if (trafficAndNightlife) {
+    return `${copy.detailWords.traffic} ${trafficAndNightlife[1]}, ${copy.detailWords.nightlife} ${trafficAndNightlife[2]}`
+  }
+
+  const trafficOnly = value.match(/^traffic (.+)$/)
+
+  if (trafficOnly) {
+    return `${copy.detailWords.traffic} ${trafficOnly[1]}`
+  }
+
+  const radius = value.match(/^radius (.+)$/)
+
+  if (radius) {
+    return `${copy.detailWords.radius} ${radius[1]}`
+  }
+
+  const caps = value.match(/^(\d+) caps$/)
+
+  if (caps) {
+    return `${caps[1]} ${copy.phrases.caps}`
+  }
+
+  return value
+}
+
+const translateAnalysisLabel = (label: string, copy: AppCopy) => {
+  const criterion = (Object.keys(copy.criteria) as CriterionId[]).find(
+    (criterionId) => APP_COPY.en.criteria[criterionId] === label,
+  )
+
+  if (criterion) {
+    return copy.criteria[criterion]
+  }
+
+  return translatePhrase(label, copy)
+}
+
+const localizePointAnalysis = (analysis: PointAnalysis, copy: AppCopy): PointAnalysis => ({
+  ...analysis,
+  label: translateScoreBand(analysis.label, copy),
+  thesis: translatePhrase(analysis.thesis, copy),
+  factors: analysis.factors.map((factor) => ({
+    ...factor,
+    label: factor.id === 'land' ? copy.phrases.Land : copy.criteria[factor.id],
+    detail: translatePhrase(factor.detail, copy),
+    summary: factor.summary ? translatePhrase(factor.summary, copy) : undefined,
+  })),
+  dataCompleteness: analysis.dataCompleteness.map((item) => ({
+    ...item,
+    label:
+      item.label === 'Residential signal'
+        ? copy.phrases['Residential signal']
+        : item.label === 'Amenities'
+          ? copy.phrases.Amenities
+          : translateAnalysisLabel(item.label, copy),
+    value: translatePhrase(item.value, copy),
+  })),
+  bestFactor: {
+    ...analysis.bestFactor,
+    label:
+      analysis.bestFactor.id === 'land'
+        ? copy.phrases.Land
+        : copy.criteria[analysis.bestFactor.id],
+    detail: translatePhrase(analysis.bestFactor.detail, copy),
+    summary: analysis.bestFactor.summary ? translatePhrase(analysis.bestFactor.summary, copy) : undefined,
+  },
+  worstFactor: {
+    ...analysis.worstFactor,
+    label:
+      analysis.worstFactor.id === 'land'
+        ? copy.phrases.Land
+        : copy.criteria[analysis.worstFactor.id],
+    detail: translatePhrase(analysis.worstFactor.detail, copy),
+    summary: analysis.worstFactor.summary ? translatePhrase(analysis.worstFactor.summary, copy) : undefined,
+  },
+})
+
 const formatMeters = (meters: number) => {
   if (!Number.isFinite(meters)) {
     return 'no data'
@@ -2433,40 +2936,40 @@ const formatMeters = (meters: number) => {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`
 }
 
-const loadStatusText = (stage: LoadStage) => {
+const loadStatusText = (stage: LoadStage, copy: AppCopy) => {
   if (stage.status === 'loading') {
-    return 'loading'
+    return copy.loading.loading
   }
 
   if (stage.status === 'cached') {
-    return stage.count === undefined ? 'cached' : `cached ${stage.count}`
+    return stage.count === undefined ? copy.loading.cached : `${copy.loading.cached} ${stage.count}`
   }
 
   if (stage.status === 'live') {
-    return stage.count === undefined ? 'ready' : String(stage.count)
+    return stage.count === undefined ? copy.loading.ready : String(stage.count)
   }
 
   if (stage.status === 'partial') {
-    return stage.detail ?? `${stage.count ?? 0}`
+    return stage.detail ? translatePhrase(stage.detail, copy) : `${stage.count ?? 0}`
   }
 
   if (stage.status === 'empty') {
     if (stage.detail === 'unsupported') {
-      return 'n/a'
+      return copy.loading.notAvailable
     }
 
     if (stage.detail === 'Boston only') {
-      return 'Boston only'
+      return copy.loading.bostonOnly
     }
 
-    return 'none'
+    return copy.loading.none
   }
 
   if (stage.status === 'error') {
-    return 'error'
+    return copy.loading.error
   }
 
-  return 'pending'
+  return copy.loading.pending
 }
 
 const nearestPoiDetail = (
@@ -3384,17 +3887,23 @@ const MapLayoutResizeSync = ({ layoutKey }: { layoutKey: string }) => {
 const PointCompletenessPanel = ({
   analysis,
   city,
+  copy,
   compact = false,
 }: {
   analysis: PointAnalysis
   city: CityConfig
+  copy: AppCopy
   compact?: boolean
 }) => {
   const landItem = analysis.dataCompleteness[0]
   const crimeItem: PointDataItem =
     supportsBostonCrimeData(city)
       ? analysis.dataCompleteness[2]
-      : { label: 'Crime', value: city.countryCode === 'us' ? 'Boston only' : 'n/a', tone: 'neutral' }
+      : {
+          label: copy.stages.crime,
+          value: city.countryCode === 'us' ? copy.loading.bostonOnly : copy.loading.notAvailable,
+          tone: 'neutral',
+        }
   const compactItems = [
     landItem,
     analysis.worstFactor.id === 'land' ? analysis.factors.find((factor) => factor.id === 'noise') : analysis.worstFactor,
@@ -3474,10 +3983,11 @@ const App = () => {
   const [selectedRegionBounds, setSelectedRegionBounds] = useState<MapBounds | null>(null)
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
   const [isInspectorOpen, setIsInspectorOpen] = useState(true)
-  const [appLanguage, setAppLanguage] = useState<'ru' | 'en'>('en')
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(DEFAULT_APP_LANGUAGE)
   const deferredCriteria = useDeferredValue(criteria)
   const isEnglish = appLanguage === 'en'
-  const shellTitle = isEnglish ? 'Housing suitability map' : 'Housing suitability map'
+  const appCopy = APP_COPY[appLanguage]
+  const shellTitle = appCopy.title
   const languageLabel = isEnglish ? 'EN' : 'RU'
   const activeRegion = useMemo(
     () => REGION_OPTIONS.find((region) => region.code === selectedState) ?? REGION_OPTIONS[0],
@@ -3575,8 +4085,49 @@ const App = () => {
     const hasBostonCrime = supportsBostonCrimeData(activeCity)
     const hasMassDotTraffic = supportsMassDotTrafficData(activeCity)
     const hasLocalRegistryRisk = supportsLocalRegistryRiskData(activeCity)
+    let staticMainSeed: MainDataSnapshot | null = null
 
-    Promise.resolve().then(() => {
+    const applyMainSnapshot = (snapshot: MainDataSnapshot, detail: string) => {
+      setPois(snapshot.pois)
+      setCrimeIncidents(snapshot.crimeIncidents)
+      setRegistryRiskPoints(snapshot.registryRiskPoints ?? [])
+      setNoiseSegments(snapshot.noiseSegments)
+      setLandPenaltyAreas(snapshot.landPenaltyAreas)
+      setTrafficSegments(snapshot.trafficSegments)
+      setDataMode(snapshot.dataMode)
+      setCrimeDataMode(snapshot.crimeDataMode)
+      setRegistryDataMode(snapshot.registryDataMode ?? 'empty')
+      setError(null)
+      setIsLoading(false)
+      setLoadStage('osm', {
+        status: snapshot.dataMode === 'live' ? 'cached' : 'partial',
+        count: snapshot.pois.length,
+        detail,
+      })
+      setLoadStage('crime', {
+        status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
+        count: snapshot.crimeIncidents.length,
+        detail: snapshot.crimeDataMode === 'live' ? detail : hasBostonCrime ? 'Boston only' : 'unsupported',
+      })
+      setLoadStage('registry', {
+        status: snapshot.registryDataMode === 'live' ? 'cached' : 'empty',
+        count: snapshot.registryRiskPoints?.length ?? 0,
+        detail:
+          snapshot.registryDataMode === 'live' ? detail : hasLocalRegistryRisk ? 'local dataset' : 'unsupported',
+      })
+      setLoadStage('noise', {
+        status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
+        count: snapshot.noiseSegments.length,
+        detail: `${snapshot.landPenaltyAreas.length} caps`,
+      })
+      setLoadStage('traffic', {
+        status: snapshot.trafficSegments.length > 0 ? 'cached' : 'empty',
+        count: snapshot.trafficSegments.length,
+        detail: snapshot.trafficSegments.length > 0 ? detail : 'OSM road proxy',
+      })
+    }
+
+    Promise.resolve().then(async () => {
       if (controller.signal.aborted) {
         return
       }
@@ -3585,43 +4136,18 @@ const App = () => {
         const snapshot = readZoneSnapshot<MainDataSnapshot>(mainSnapshotKey)
 
         if (snapshot) {
-          setPois(snapshot.pois)
-          setCrimeIncidents(snapshot.crimeIncidents)
-          setRegistryRiskPoints(snapshot.registryRiskPoints ?? [])
-          setNoiseSegments(snapshot.noiseSegments)
-          setLandPenaltyAreas(snapshot.landPenaltyAreas)
-          setTrafficSegments(snapshot.trafficSegments)
-          setDataMode(snapshot.dataMode)
-          setCrimeDataMode(snapshot.crimeDataMode)
-          setRegistryDataMode(snapshot.registryDataMode ?? 'empty')
-          setError(null)
-          setIsLoading(false)
-          setLoadStage('osm', {
-            status: snapshot.dataMode === 'live' ? 'cached' : 'empty',
-            count: snapshot.pois.length,
-            detail: snapshot.dataMode === 'live' ? 'snapshot' : 'fallback',
-          })
-          setLoadStage('crime', {
-            status: snapshot.crimeDataMode === 'live' ? 'cached' : 'empty',
-            count: snapshot.crimeIncidents.length,
-            detail: snapshot.crimeDataMode === 'live' ? 'snapshot' : hasBostonCrime ? 'Boston only' : 'unsupported',
-          })
-          setLoadStage('registry', {
-            status: snapshot.registryDataMode === 'live' ? 'cached' : 'empty',
-            count: snapshot.registryRiskPoints?.length ?? 0,
-            detail:
-              snapshot.registryDataMode === 'live' ? 'snapshot' : hasLocalRegistryRisk ? 'local dataset' : 'unsupported',
-          })
-          setLoadStage('noise', {
-            status: snapshot.noiseSegments.length > 0 ? 'cached' : 'empty',
-            count: snapshot.noiseSegments.length,
-            detail: `${snapshot.landPenaltyAreas.length} caps`,
-          })
-          setLoadStage('traffic', {
-            status: snapshot.trafficSegments.length > 0 ? 'cached' : 'empty',
-            count: snapshot.trafficSegments.length,
-            detail: snapshot.trafficSegments.length > 0 ? 'snapshot' : 'OSM road proxy',
-          })
+          applyMainSnapshot(snapshot, 'snapshot')
+          return
+        }
+
+        staticMainSeed = await fetchStaticBostonMainSeed(controller.signal, activeCity, activeDataBounds)
+
+        if (controller.signal.aborted) {
+          return
+        }
+
+        if (staticMainSeed) {
+          applyMainSnapshot(staticMainSeed, 'repo seed')
           return
         }
       }
@@ -3879,15 +4405,22 @@ const App = () => {
         const nextPois =
           poiResult.status === 'fulfilled' && poiResult.value.length > 0
             ? poiResult.value
-            : activeCity.id === 'ma-boston'
-              ? FALLBACK_POIS
-              : []
+            : staticMainSeed?.pois ??
+              (activeCity.id === 'ma-boston'
+                ? FALLBACK_POIS
+                : [])
         const nextDataMode: DataMode =
           poiResult.status === 'fulfilled' && poiResult.value.length > 0 ? 'live' : 'sample'
-        const nextCrimeIncidents = crimeResult.status === 'fulfilled' ? crimeResult.value : []
+        const nextCrimeIncidents =
+          crimeResult.status === 'fulfilled' && crimeResult.value.length > 0
+            ? crimeResult.value
+            : staticMainSeed?.crimeIncidents ?? []
         const nextCrimeDataMode: CrimeDataMode =
           crimeResult.status === 'fulfilled' && crimeResult.value.length > 0 ? 'live' : 'empty'
-        const nextRegistryRiskPoints = registryResult.status === 'fulfilled' ? registryResult.value : []
+        const nextRegistryRiskPoints =
+          registryResult.status === 'fulfilled' && registryResult.value.length > 0
+            ? registryResult.value
+            : staticMainSeed?.registryRiskPoints ?? []
         const nextRegistryDataMode: RegistryDataMode =
           registryResult.status === 'fulfilled' && registryResult.value.length > 0 ? 'live' : 'empty'
         const nextNoiseSegments =
@@ -3901,7 +4434,9 @@ const App = () => {
         const nextTrafficSegments =
           trafficResult.status === 'fulfilled' && trafficResult.value.length > 0
             ? trafficResult.value
-            : fallbackTrafficSegments
+            : fallbackTrafficSegments.length > 0
+              ? fallbackTrafficSegments
+              : staticMainSeed?.trafficSegments ?? []
         const trafficUsesFallback =
           nextTrafficSegments.length > 0 &&
           !(trafficResult.status === 'fulfilled' && trafficResult.value.length > 0)
@@ -4372,22 +4907,24 @@ const App = () => {
   }, [loadStages])
 
   const loadingHeadline = useMemo(() => {
-    const loadingStage = Object.values(loadStages).find((stage) => stage.status === 'loading')
+    const loadingStage = (Object.entries(loadStages) as Array<[LoadStageId, LoadStage]>).find(
+      ([, stage]) => stage.status === 'loading',
+    )
 
     if (loadingStage) {
-      return `${loadingStage.label}: loading`
+      return `${appCopy.stages[loadingStage[0]]}: ${appCopy.loading.loading}`
     }
 
     if (Object.values(loadStages).some((stage) => stage.status === 'error')) {
-      return 'Loaded with gaps'
+      return appCopy.loading.gaps
     }
 
     if (Object.values(loadStages).some((stage) => stage.status === 'partial')) {
-      return 'Partially loaded'
+      return appCopy.loading.partial
     }
 
-    return 'Data ready'
-  }, [loadStages])
+    return appCopy.loading.dataReady
+  }, [appCopy, loadStages])
 
   const overlayIsResolving =
     isLoading ||
@@ -4395,7 +4932,7 @@ const App = () => {
     residentialEvidence.isProvisionalEligibility ||
     Object.values(loadStages).some((stage) => stage.status === 'loading')
 
-  const selectedAnalysis = useMemo(
+  const rawSelectedAnalysis = useMemo(
     () =>
       analyzePoint(
         selectedPoint,
@@ -4424,6 +4961,10 @@ const App = () => {
       trafficSegments,
     ],
   )
+  const selectedAnalysis = useMemo(
+    () => localizePointAnalysis(rawSelectedAnalysis, appCopy),
+    [appCopy, rawSelectedAnalysis],
+  )
 
   const selectedSiteId = `${selectedAnalysis.point.lat.toFixed(5)}-${selectedAnalysis.point.lng.toFixed(5)}`
   const isSelectedSitePinned = savedSites.some((site) => site.id === selectedSiteId)
@@ -4433,18 +4974,21 @@ const App = () => {
       neighborhoodScores
         .map((item) => ({
           ...item,
-          analysis: analyzePoint(
-            item,
-            activeCity,
-            criteria,
-            suitabilityField,
-            poisByCategory,
-            crimeIncidents,
-            registryRiskPoints,
-            noiseSegments,
-            landPenaltyAreas,
-            trafficSegments,
-            dataCoverage,
+          analysis: localizePointAnalysis(
+            analyzePoint(
+              item,
+              activeCity,
+              criteria,
+              suitabilityField,
+              poisByCategory,
+              crimeIncidents,
+              registryRiskPoints,
+              noiseSegments,
+              landPenaltyAreas,
+              trafficSegments,
+              dataCoverage,
+            ),
+            appCopy,
           ),
         }))
         .sort((a, b) => b.analysis.opportunityScore - a.analysis.opportunityScore),
@@ -4452,6 +4996,7 @@ const App = () => {
       crimeIncidents,
       registryRiskPoints,
       activeCity,
+      appCopy,
       criteria,
       dataCoverage,
       landPenaltyAreas,
@@ -4537,36 +5082,20 @@ const App = () => {
   ])
 
   const mapTopBar = (
-    <div className="map-topbar" aria-label="Search and panels">
+    <div className="map-topbar" aria-label={appCopy.topbar.searchAndPanels}>
       <button
         className="icon-button"
         type="button"
         onClick={() => setIsLeftPanelOpen((current) => !current)}
-        aria-label={
-          isLeftPanelOpen
-            ? isEnglish
-              ? 'Hide filters'
-              : 'Hide filters'
-            : isEnglish
-              ? 'Show filters'
-              : 'Show filters'
-        }
-        title={
-          isLeftPanelOpen
-            ? isEnglish
-              ? 'Hide filters'
-              : 'Hide filters'
-            : isEnglish
-              ? 'Show filters'
-              : 'Show filters'
-        }
+        aria-label={isLeftPanelOpen ? appCopy.topbar.hidePanel : appCopy.topbar.showPanel}
+        title={isLeftPanelOpen ? appCopy.topbar.hidePanel : appCopy.topbar.showPanel}
       >
         {isLeftPanelOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
       </button>
       <div className="map-search">
         <Search size={16} />
         <select
-          aria-label="Region"
+          aria-label={appCopy.topbar.region}
           value={selectedState}
           onChange={(event) => {
             const nextState = event.target.value
@@ -4590,7 +5119,7 @@ const App = () => {
           ))}
         </select>
         <input
-          aria-label="City or area"
+          aria-label={appCopy.topbar.city}
           list="major-city-options"
           placeholder={activeCityLabel}
           type="text"
@@ -4612,15 +5141,15 @@ const App = () => {
           disabled={isSearchingCity || citySearchText.trim().length === 0}
           type="button"
           onClick={searchCity}
-          aria-label={isEnglish ? 'Find city' : 'Find city'}
-          title={isEnglish ? 'Find city' : 'Find city'}
+          aria-label={appCopy.topbar.findCity}
+          title={appCopy.topbar.findCity}
         >
           {isSearchingCity ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
         </button>
         {supportsPostalSearch ? (
           <>
             <input
-              aria-label="ZIP code"
+              aria-label={appCopy.topbar.zip}
               inputMode="numeric"
               placeholder="ZIP"
               type="text"
@@ -4637,8 +5166,8 @@ const App = () => {
               disabled={isSearchingZip || !isUsZipCode(zipSearchText)}
               type="button"
               onClick={searchZip}
-              aria-label={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
-              title={isEnglish ? 'Find ZIP code' : 'Find ZIP'}
+              aria-label={appCopy.topbar.findZip}
+              title={appCopy.topbar.findZip}
             >
               {isSearchingZip ? <Loader2 className="spin" size={15} /> : <MapPin size={15} />}
             </button>
@@ -4652,8 +5181,8 @@ const App = () => {
           setDraftRegionBounds(null)
           setIsRegionSelectMode((current) => !current)
         }}
-        aria-label={isEnglish ? 'Select region' : 'Select region'}
-        title={isEnglish ? 'Select region' : 'Select region'}
+        aria-label={appCopy.topbar.selectRegion}
+        title={appCopy.topbar.selectRegion}
       >
         <Target size={15} />
       </button>
@@ -4661,8 +5190,8 @@ const App = () => {
         className="icon-button"
         type="button"
         onClick={refreshData}
-        aria-label={isEnglish ? 'Refresh data' : 'Refresh data'}
-        title={isEnglish ? 'Refresh data' : 'Refresh data'}
+        aria-label={appCopy.topbar.refresh}
+        title={appCopy.topbar.refresh}
       >
         {isLoading ? <Loader2 className="spin" size={18} /> : <RefreshCcw size={18} />}
       </button>
@@ -4670,8 +5199,8 @@ const App = () => {
         className="language-toggle"
         type="button"
         onClick={() => setAppLanguage((current) => (current === 'ru' ? 'en' : 'ru'))}
-        aria-label={isEnglish ? 'Switch to Russian' : 'Switch to English'}
-        title={isEnglish ? 'Switch to Russian' : 'Switch to English'}
+        aria-label={appCopy.topbar.switchLanguage}
+        title={appCopy.topbar.switchLanguage}
       >
         <Languages size={15} />
         {languageLabel}
@@ -4680,24 +5209,8 @@ const App = () => {
         className="icon-button"
         type="button"
         onClick={() => setIsInspectorOpen((current) => !current)}
-        aria-label={
-          isInspectorOpen
-            ? isEnglish
-              ? 'Hide inspector'
-              : 'Hide inspector'
-            : isEnglish
-              ? 'Show inspector'
-              : 'Show inspector'
-        }
-        title={
-          isInspectorOpen
-            ? isEnglish
-              ? 'Hide inspector'
-              : 'Hide inspector'
-            : isEnglish
-              ? 'Show inspector'
-              : 'Show inspector'
-        }
+        aria-label={isInspectorOpen ? appCopy.topbar.hideInspector : appCopy.topbar.showInspector}
+        title={isInspectorOpen ? appCopy.topbar.hideInspector : appCopy.topbar.showInspector}
       >
         {isInspectorOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
       </button>
@@ -4705,18 +5218,18 @@ const App = () => {
   )
 
   const pointInspector = (
-    <aside className="inspector-panel" aria-label="Point inspector">
+    <aside className="inspector-panel" aria-label={appCopy.panels.pointInspector}>
       <header className="inspector-header">
         <div>
-          <p className="eyebrow">Point</p>
+          <p className="eyebrow">{appCopy.panels.point}</p>
           <h2>{selectedAnalysis.label}</h2>
         </div>
         <button
           className="icon-button"
           type="button"
           onClick={() => setIsInspectorOpen(false)}
-          aria-label="Hide inspector"
-          title="Hide inspector"
+          aria-label={appCopy.topbar.hideInspector}
+          title={appCopy.topbar.hideInspector}
         >
           <PanelRightClose size={18} />
         </button>
@@ -4730,15 +5243,15 @@ const App = () => {
           {Math.round(selectedAnalysis.score * 100)}
         </span>
         <div>
-          <span>Risk {Math.round(selectedAnalysis.riskScore * 100)}</span>
-          <strong>Confidence {Math.round(selectedAnalysis.confidence * 100)}%</strong>
+          <span>{appCopy.panels.risk} {Math.round(selectedAnalysis.riskScore * 100)}</span>
+          <strong>{appCopy.panels.confidence} {Math.round(selectedAnalysis.confidence * 100)}%</strong>
         </div>
       </div>
 
       <section className="panel-section analysis-card">
         <div className="analysis-head">
           <div>
-            <span className="mini-label">Coordinates</span>
+            <span className="mini-label">{appCopy.panels.coordinates}</span>
             <strong>
               {selectedAnalysis.point.lat.toFixed(5)}, {selectedAnalysis.point.lng.toFixed(5)}
             </strong>
@@ -4748,14 +5261,15 @@ const App = () => {
         <PointCompletenessPanel
           analysis={selectedAnalysis}
           city={activeCity}
+          copy={appCopy}
         />
         <div className="point-context">
           <div>
-            <span>Upside</span>
+            <span>{appCopy.panels.upside}</span>
             <strong>{selectedAnalysis.bestFactor.detail}</strong>
           </div>
           <div>
-            <span>Risk</span>
+            <span>{appCopy.panels.risk}</span>
             <strong>{selectedAnalysis.worstFactor.detail}</strong>
           </div>
         </div>
@@ -4787,18 +5301,18 @@ const App = () => {
             onClick={addSelectedSite}
           >
             <Star size={16} />
-            {isSelectedSitePinned ? 'Pinned' : 'Pin'}
+            {isSelectedSitePinned ? appCopy.panels.pinned : appCopy.panels.pin}
           </button>
           <button className="text-button" type="button" onClick={exportReport}>
             <Download size={16} />
-            Export
+            {appCopy.panels.export}
           </button>
         </div>
       </section>
 
       <section className="panel-section">
         <div className="section-title">
-          <span>Pinned sites</span>
+          <span>{appCopy.panels.pinnedSites}</span>
           <Star size={16} />
         </div>
         <div className="shortlist">
@@ -4811,7 +5325,7 @@ const App = () => {
               </div>
             ))
           ) : (
-            <p className="empty-note">No pinned points.</p>
+            <p className="empty-note">{appCopy.panels.noPinned}</p>
           )}
         </div>
       </section>
@@ -4824,7 +5338,7 @@ const App = () => {
         isInspectorOpen ? '' : 'right-collapsed'
       }`}
     >
-      <aside className="control-panel" aria-label="Map settings">
+      <aside className="control-panel" aria-label={appCopy.panels.mapSettings}>
         <header className="panel-header">
           <div>
             <p className="eyebrow">{activeCity.state}</p>
@@ -4832,7 +5346,7 @@ const App = () => {
           </div>
         </header>
 
-        <section className="load-panel" aria-label="Load status">
+        <section className="load-panel" aria-label={appCopy.panels.loadStatus}>
           <div className="load-head">
             <strong>{loadingHeadline}</strong>
             <span>{loadProgress}%</span>
@@ -4846,8 +5360,8 @@ const App = () => {
 
               return (
                 <div className={`load-row ${stage.status}`} key={stageId}>
-                  <span>{stage.label}</span>
-                  <strong>{loadStatusText(stage)}</strong>
+                  <span>{appCopy.stages[stageId]}</span>
+                  <strong>{loadStatusText(stage, appCopy)}</strong>
                 </div>
               )
             })}
@@ -4856,23 +5370,23 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Region</span>
+            <span>{appCopy.topbar.region}</span>
             <SlidersHorizontal size={16} />
           </div>
           <div className="source-grid">
-            <span>Active</span>
+            <span>{appCopy.panels.active}</span>
             <strong>{activeCityLabel}, {activeCity.state}</strong>
-            <span>Selection</span>
+            <span>{appCopy.panels.selection}</span>
             <strong>
               {selectedRegionBounds
                 ? formatBoundsSummary(selectedRegionBounds)
                 : isRegionSelectMode
-                  ? 'selecting'
-                  : 'none'}
+                  ? appCopy.panels.selecting
+                  : appCopy.panels.none}
             </strong>
           </div>
           <label className="range-row">
-            <span>Grid</span>
+            <span>{appCopy.panels.grid}</span>
             <select
               value={cellSizeMeters}
               onChange={(event) => setCellSizeMeters(Number(event.target.value))}
@@ -4887,9 +5401,9 @@ const App = () => {
           <div className="resolution-row">
             <span>
               {cellSizeMeters === appliedCellSizeMeters
-                ? `Active: ${appliedCellSizeMeters} m`
-                : `Selected: ${cellSizeMeters} m`}
-              {renderedGridIsThrottled ? ` · rendered ${renderedCellSizeMeters} m` : ''}
+                ? `${appCopy.panels.activeGrid}: ${appliedCellSizeMeters} m`
+                : `${appCopy.panels.selectedGrid}: ${cellSizeMeters} m`}
+              {renderedGridIsThrottled ? ` · ${appCopy.panels.renderedGrid} ${renderedCellSizeMeters} m` : ''}
             </span>
             <button
               className="text-button"
@@ -4897,14 +5411,14 @@ const App = () => {
               type="button"
               onClick={applyGridResolution}
             >
-              Apply
+              {appCopy.panels.apply}
             </button>
           </div>
         </section>
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Scoring profile</span>
+            <span>{appCopy.panels.scoringProfile}</span>
           </div>
           <div className="profile-grid">
             {EVALUATION_PROFILES.map((profile) => (
@@ -4914,7 +5428,7 @@ const App = () => {
                 type="button"
                 onClick={() => applyProfile(profile)}
               >
-                {profile.label}
+                {appCopy.profiles[profile.id as keyof typeof appCopy.profiles] ?? profile.label}
               </button>
             ))}
           </div>
@@ -4922,7 +5436,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Overlay</span>
+            <span>{appCopy.panels.overlay}</span>
             <Layers3 size={16} />
           </div>
           <div className="segmented-control">
@@ -4933,7 +5447,11 @@ const App = () => {
                 type="button"
                 onClick={() => setLayerMode(mode)}
               >
-                {mode === 'suitability' ? 'Score' : mode === 'risk' ? 'Risk' : 'Potential'}
+                {mode === 'suitability'
+                  ? appCopy.panels.score
+                  : mode === 'risk'
+                    ? appCopy.panels.risk
+                    : appCopy.panels.potential}
               </button>
             ))}
           </div>
@@ -4943,10 +5461,10 @@ const App = () => {
               type="checkbox"
               onChange={(event) => setShowOverlay(event.target.checked)}
             />
-            <span>Show layer</span>
+            <span>{appCopy.panels.showLayer}</span>
           </label>
           <label className="range-row">
-            <span>Opacity</span>
+            <span>{appCopy.panels.opacity}</span>
             <input
               max="0.82"
               min="0.18"
@@ -4960,14 +5478,14 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Criteria</span>
+            <span>{appCopy.panels.criteria}</span>
             <button
               className="text-button"
               type="button"
               onClick={() => setShowPois((current) => !current)}
             >
               {showPois ? <EyeOff size={16} /> : <Eye size={16} />}
-              {showPois ? 'Hide points' : 'Show points'}
+              {showPois ? appCopy.panels.hidePoints : appCopy.panels.showPoints}
             </button>
           </div>
 
@@ -5008,11 +5526,11 @@ const App = () => {
                     <span className="criterion-icon">
                       <Icon size={16} />
                     </span>
-                    <span>{criterion.label}</span>
+                    <span>{appCopy.criteria[criterion.id]}</span>
                     <span className="criterion-count">{pointCount}</span>
                   </label>
                   <input
-                    aria-label={`${criterion.label}: weight`}
+                    aria-label={`${appCopy.criteria[criterion.id]}: weight`}
                     disabled={!criterion.enabled}
                     max="100"
                     min="0"
@@ -5030,7 +5548,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Strong zones</span>
+            <span>{appCopy.panels.strongZones}</span>
           </div>
           <div className="rank-list">
             {neighborhoodScores.slice(0, 6).map((item) => (
@@ -5046,7 +5564,7 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Growth zones</span>
+            <span>{appCopy.panels.growthZones}</span>
             <Sparkles size={16} />
           </div>
           <div className="rank-list compact">
@@ -5054,8 +5572,8 @@ const App = () => {
               <div className="rank-row" key={item.name}>
                 <span className="rank-name">{item.name}</span>
                 <span className="score-pair">
-                  <span>{Math.round(item.analysis.opportunityScore * 100)} potential</span>
-                  <strong>{Math.round(item.analysis.riskScore * 100)} risk</strong>
+                  <span>{Math.round(item.analysis.opportunityScore * 100)} {appCopy.detailWords.potential}</span>
+                  <strong>{Math.round(item.analysis.riskScore * 100)} {appCopy.detailWords.risk}</strong>
                 </span>
               </div>
             ))}
@@ -5064,22 +5582,22 @@ const App = () => {
 
         <section className="panel-section">
           <div className="section-title">
-            <span>Sources</span>
+            <span>{appCopy.panels.sources}</span>
           </div>
           <div className="source-grid">
             <span>OSM</span>
             <strong>{dataMode === 'live' ? pois.length : FALLBACK_POIS.length}</strong>
-            <span>Crime</span>
+            <span>{appCopy.stages.crime}</span>
             <strong>{crimeIncidents.length}</strong>
-            <span>Registry</span>
+            <span>{appCopy.stages.registry}</span>
             <strong>{registryRiskPoints.length}</strong>
-            <span>Noise</span>
+            <span>{appCopy.stages.noise}</span>
             <strong>{noiseSegments.length}</strong>
-            <span>Traffic</span>
+            <span>{appCopy.stages.traffic}</span>
             <strong>{trafficSegments.length}</strong>
-            <span>Land</span>
+            <span>{appCopy.phrases.Land}</span>
             <strong>{landPenaltyAreas.length}</strong>
-            <span>Buildings</span>
+            <span>{appCopy.stages.buildings}</span>
             <strong>
               {buildingDataMode === 'loading'
                 ? '...'
@@ -5089,26 +5607,26 @@ const App = () => {
             </strong>
           </div>
           {buildingIsCapped ? (
-            <p className="data-note">Buildings sample: {buildingFootprints.length} of {buildingTotalCount}.</p>
+            <p className="data-note">{appCopy.panels.buildingsSample}: {buildingFootprints.length} {appCopy.panels.of} {buildingTotalCount}.</p>
           ) : null}
         </section>
 
         <footer className="panel-footer">
           <div className="legend">
-            <span>Critical</span>
+            <span>{appCopy.panels.critical}</span>
             <div className="legend-ramp" />
-            <span>Top</span>
+            <span>{appCopy.panels.top}</span>
           </div>
-          <div className="legend-labels" aria-label="Suitability scale">
+          <div className="legend-labels" aria-label={appCopy.panels.suitabilityScale}>
             {SCORE_BANDS.map((band) => (
               <span key={band.range}>
                 <i style={{ backgroundColor: band.color }} />
                 <strong>{band.range}</strong>
-                {band.label}
+                {translateScoreBand(band.label, appCopy)}
               </span>
             ))}
           </div>
-          {error ? <p className="data-note">Some live data is unavailable.</p> : null}
+          {error ? <p className="data-note">{appCopy.panels.liveDataUnavailable}</p> : null}
         </footer>
       </aside>
 
@@ -5186,7 +5704,7 @@ const App = () => {
                   <Popup>
                     <div className="poi-popup">
                       <strong>{poi.name}</strong>
-                      <span>{CATEGORY_META[poi.category].label}</span>
+                      <span>{appCopy.categories[poi.category]}</span>
                     </div>
                   </Popup>
                 </CircleMarker>
