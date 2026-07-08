@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AttributionControl,
   CircleMarker,
@@ -636,6 +636,66 @@ const detailBoundsForViewport = (
   }
 
   return paddedBoundsWithin(visibleCityBounds, cityBounds, VIEWPORT_DETAIL_PADDING_RATIO)
+}
+
+const latLngBoundsForPoints = (points: LatLng[]): MapBounds | null => {
+  if (points.length === 0) {
+    return null
+  }
+
+  return points.reduce(
+    (bounds, point) => ({
+      south: Math.min(bounds.south, point.lat),
+      west: Math.min(bounds.west, point.lng),
+      north: Math.max(bounds.north, point.lat),
+      east: Math.max(bounds.east, point.lng),
+    }),
+    { south: points[0].lat, west: points[0].lng, north: points[0].lat, east: points[0].lng },
+  )
+}
+
+const boundsIntersect = (a: MapBounds, b: MapBounds) =>
+  a.south <= b.north && a.north >= b.south && a.west <= b.east && a.east >= b.west
+
+const decimateLatLngRing = (points: LatLng[], maxPoints: number) => {
+  if (points.length <= maxPoints) {
+    return points
+  }
+
+  const step = Math.ceil(points.length / maxPoints)
+  const decimated = points.filter((_, index) => index % step === 0)
+  const lastPoint = points[points.length - 1]
+
+  if (lastPoint && decimated[decimated.length - 1] !== lastPoint) {
+    decimated.push(lastPoint)
+  }
+
+  return decimated.length >= 3 ? decimated : points.slice(0, 3)
+}
+
+const overlayLandPenaltyAreasForBounds = (
+  areas: LandPenaltyArea[],
+  bounds: MapBounds,
+  cellSizeMeters: number,
+) => {
+  const maxPolygonPoints = cellSizeMeters <= 50 ? 900 : 650
+  const maxLinePoints = cellSizeMeters <= 50 ? 700 : 500
+
+  return areas
+    .filter((area) => {
+      const areaBounds = latLngBoundsForPoints(area.points)
+      return areaBounds ? boundsIntersect(areaBounds, bounds) : false
+    })
+    .map((area) => ({
+      ...area,
+      points: decimateLatLngRing(area.points, area.isLinear ? maxLinePoints : maxPolygonPoints),
+      holes: area.holes
+        ?.filter((hole) => {
+          const holeBounds = latLngBoundsForPoints(hole)
+          return holeBounds ? boundsIntersect(holeBounds, bounds) : false
+        })
+        .map((hole) => decimateLatLngRing(hole, Math.max(80, Math.floor(maxPolygonPoints / 3)))),
+    }))
 }
 
 type ResidentialEvidenceField = {
@@ -3715,20 +3775,37 @@ type MapViewSnapshot = {
 
 const MapViewStateSync = ({ onChange }: { onChange: (snapshot: MapViewSnapshot) => void }) => {
   const map = useMap()
+  const timeoutRef = useRef<number | null>(null)
   const emitSnapshot = useCallback(() => {
     onChange({
       bounds: plainBoundsFromLeaflet(map.getBounds()),
       zoom: map.getZoom(),
     })
   }, [map, onChange])
+  const scheduleSnapshot = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current)
+    }
+
+    timeoutRef.current = window.setTimeout(() => {
+      timeoutRef.current = null
+      emitSnapshot()
+    }, 180)
+  }, [emitSnapshot])
 
   useEffect(() => {
     emitSnapshot()
+
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current)
+      }
+    }
   }, [emitSnapshot])
 
   useMapEvents({
-    moveend: emitSnapshot,
-    zoomend: emitSnapshot,
+    moveend: scheduleSnapshot,
+    zoomend: scheduleSnapshot,
   })
 
   return null
@@ -4701,6 +4778,16 @@ const App = () => {
     ],
   )
 
+  const overlayLandPenaltyAreas = useMemo(
+    () =>
+      overlayLandPenaltyAreasForBounds(
+        landPenaltyAreas,
+        deferredOverlayFieldBounds,
+        deferredOverlayCellSizeMeters,
+      ),
+    [deferredOverlayCellSizeMeters, deferredOverlayFieldBounds, landPenaltyAreas],
+  )
+
   const overlaySpatialFactorField = useMemo(
     () =>
       buildSpatialFactorField(
@@ -4708,7 +4795,7 @@ const App = () => {
         crimeIncidents,
         registryRiskPoints,
         noiseSegments,
-        landPenaltyAreas,
+        overlayLandPenaltyAreas,
         trafficSegments,
         deferredOverlayFieldBounds,
         activeCity.boundaryAreas,
@@ -4721,8 +4808,8 @@ const App = () => {
       deferredOverlayFieldBounds,
       crimeIncidents,
       registryRiskPoints,
-      landPenaltyAreas,
       noiseSegments,
+      overlayLandPenaltyAreas,
       poisByCategory,
       trafficSegments,
     ],
